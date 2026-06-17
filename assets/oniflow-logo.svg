@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="180" viewBox="0 0 640 180">
+  <rect width="640" height="180" rx="28" fill="#0e1525"/>
+  <circle cx="92" cy="90" r="52" fill="none" stroke="#38bdf8" stroke-width="14"/>
+  <path d="M72 104c22-48 45-48 68 0" fill="none" stroke="#287bb5" stroke-width="14" stroke-linecap="round"/>
+  <text x="172" y="105" fill="#f8fafc" font-family="Segoe UI,Arial,sans-serif" font-size="64" font-weight="700">ONIFLOW</text>
+  <text x="176" y="137" fill="#38bdf8" font-family="Segoe UI,Arial,sans-serif" font-size="18" font-weight="600">AI VIDEO INTERPOLATION</text>
+</svg>

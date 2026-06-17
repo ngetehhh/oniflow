@@ -1,0 +1,52 @@
+{
+  "gmfss_anime": {
+    "cwd": "work\\GMFSS_Fortuna",
+    "output_extension": "mp4",
+    "command": [
+      "{project_root}\\work\\gmfss-venv\\Scripts\\python.exe",
+      "inference_video.py",
+      "--video",
+      "{input}",
+      "--output",
+      "{output}",
+      "--model",
+      "train_log_live_union",
+      "--fps",
+      "{target_fps}",
+      "--multi",
+      "{multiplier}",
+      "--scale",
+      "{scale}",
+      "--union",
+      "--amp"
+    ]
+  },
+  "gmfss_live_action": {
+    "cwd": "work\\GMFSS_Fortuna",
+    "output_extension": "mp4",
+    "command": [
+      "{project_root}\\work\\gmfss-venv\\Scripts\\python.exe",
+      "inference_video.py",
+      "--video",
+      "{input}",
+      "--output",
+      "{output}",
+      "--model",
+      "train_log_live_union",
+      "--fps",
+      "{target_fps}",
+      "--multi",
+      "{multiplier}",
+      "--scale",
+      "{scale}",
+      "--union",
+      "--amp"
+    ]
+  },
+  "encoder": {
+    "codec": "av1_nvenc",
+    "preset": "p6",
+    "cq": 18,
+    "pixel_format": "p010le"
+  }
+}
