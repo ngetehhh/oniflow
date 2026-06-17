@@ -72,7 +72,7 @@ DEFAULT_SETTINGS = {
     "default_output_format": "MP4",
     "default_slow_motion": "Off",
 }
-APP_VERSION = "0.9.2-beta"
+APP_VERSION = "0.9.3-beta"
 ACCESS_FEATURE_ENABLED = False
 OFFLINE_LICENSE_REQUIRED = True
 FREE_DAILY_CLIP_LIMIT = 15
