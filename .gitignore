@@ -6,19 +6,7 @@ license.json
 user_settings.json
 runtime-config.json
 
-work/*
-!work/GMFSS_Fortuna/
-work/gmfss-venv/
-work/*.zip
-work/GMFSS_Fortuna/.git/
-work/GMFSS_Fortuna/temp/
-work/GMFSS_Fortuna/vid_out/
-work/GMFSS_Fortuna/train_log*/
-work/GMFSS_Fortuna/model/lpips/weights/
-work/GMFSS_Fortuna/**/*.pkl
-work/GMFSS_Fortuna/**/*.pth
-work/GMFSS_Fortuna/**/*.pt
-work/GMFSS_Fortuna/**/*.ckpt
+work/
 release/
 dist/
 build/
