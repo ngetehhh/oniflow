@@ -15,6 +15,11 @@ if (-not (Test-Path $Repo)) {
     git clone --depth 1 https://github.com/98mxr/GMFSS_Fortuna.git $Repo
 }
 
+$OniflowInferenceOverride = Join-Path $Root "patches\GMFSS_Fortuna\inference_video.py"
+if (Test-Path $OniflowInferenceOverride) {
+    Copy-Item -Force $OniflowInferenceOverride (Join-Path $Repo "inference_video.py")
+}
+
 if (-not (Test-Path $Venv)) {
     & $Python -m venv $Venv
 }

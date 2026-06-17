@@ -96,12 +96,16 @@ class ProductTests(unittest.TestCase):
     def test_inference_backend_uses_safe_model_loading_and_no_shell_commands(self):
         backend = (ROOT / "work" / "GMFSS_Fortuna")
         inference = (backend / "inference_video.py").read_text(encoding="utf-8")
+        override = (ROOT / "patches" / "GMFSS_Fortuna" / "inference_video.py").read_text(encoding="utf-8")
+        setup = (ROOT / "setup_gmfss.ps1").read_text(encoding="utf-8")
         union = (backend / "model" / "GMFSS_infer_u.py").read_text(encoding="utf-8")
         base = (backend / "model" / "GMFSS_infer_b.py").read_text(encoding="utf-8")
         self.assertNotIn("os.system(", inference)
         self.assertIn("skvideo.setFFmpegPath(str(TOOLS_DIR))", inference)
         self.assertIn('os.environ["PATH"] = str(TOOLS_DIR)', inference)
         self.assertIn('FFMPEG_EXE if FFMPEG_EXE.is_file() else "ffmpeg"', inference)
+        self.assertIn("skvideo.setFFmpegPath(str(TOOLS_DIR))", override)
+        self.assertIn("patches\\GMFSS_Fortuna\\inference_video.py", setup)
         self.assertIn("weights_only=True", union)
         self.assertIn("weights_only=True", base)
 
