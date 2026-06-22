@@ -6,6 +6,7 @@ param(
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Python = Join-Path $Root "work\gmfss-venv\Scripts\python.exe"
+$IntegrityAdmin = Join-Path $Root "integrity_admin.py"
 $Dist = Join-Path $Root "dist"
 $LauncherDist = Join-Path $Dist "launcher-build"
 $NativeDist = Join-Path $Dist "nuitka-launcher"
@@ -25,6 +26,9 @@ $ReleaseDocuments = @(
 )
 
 if (-not (Test-Path $Python)) { throw "Oniflow Python environment is missing." }
+if (-not (Test-Path $IntegrityAdmin)) {
+    throw "Owner-only integrity_admin.py is missing. Keep it local and outside public GitHub before building a signed release."
+}
 $BasePython = (& $Python -c "import sys; print(sys.base_prefix)").Trim()
 if (-not (Test-Path (Join-Path $BasePython "python.exe"))) { throw "Base Python runtime is missing." }
 Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $LauncherDist
@@ -57,7 +61,43 @@ if ($LASTEXITCODE -gt 7) { throw "Failed to copy the standalone Python runtime."
 New-Item -ItemType Directory -Force (Join-Path $PortableRuntime "Lib\site-packages") | Out-Null
 robocopy (Join-Path $Root "work\gmfss-venv\Lib\site-packages") (Join-Path $PortableRuntime "Lib\site-packages") /E /XD __pycache__ pip pip-* setuptools setuptools-* pip_audit pip_audit-* /XF *.pyc *.pyo direct_url.json | Out-Null
 if ($LASTEXITCODE -gt 7) { throw "Failed to copy Python dependencies." }
-Remove-Item -Recurse -Force -ErrorAction SilentlyContinue (Join-Path $PortableRuntime "Lib\site-packages\skvideo\datasets\data")
+$SitePackages = Join-Path $PortableRuntime "Lib\site-packages"
+$PrunedRuntimePackages = @(
+    "PyInstaller",
+    "pyinstaller-*",
+    "nuitka",
+    "Nuitka-*",
+    "ordered_set*",
+    "zstandard*",
+    "tensorboard",
+    "tensorboard-*",
+    "matplotlib",
+    "matplotlib-*",
+    "imageio_ffmpeg",
+    "imageio_ffmpeg-*",
+    "pip",
+    "pip-*",
+    "setuptools",
+    "setuptools-*"
+)
+foreach ($PackagePattern in $PrunedRuntimePackages) {
+    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue (Join-Path $SitePackages $PackagePattern)
+}
+$PrunedRuntimePaths = @(
+    (Join-Path $PortableRuntime "include"),
+    (Join-Path $PortableRuntime "Lib\site-packages\torch\include"),
+    (Join-Path $PortableRuntime "Lib\site-packages\torch\share"),
+    (Join-Path $PortableRuntime "Lib\site-packages\torch\test"),
+    (Join-Path $PortableRuntime "Lib\site-packages\torch\utils\tensorboard")
+)
+foreach ($RuntimePath in $PrunedRuntimePaths) {
+    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $RuntimePath
+}
+Remove-Item -Recurse -Force -ErrorAction SilentlyContinue (Join-Path $SitePackages "skvideo\datasets\data")
+Get-ChildItem -Path $SitePackages -Directory -Recurse -Force -Filter "tests" |
+    Remove-Item -Recurse -Force
+Get-ChildItem -Path $SitePackages -Directory -Recurse -Force -Filter "test" |
+    Remove-Item -Recurse -Force
 Copy-Item -Force (Join-Path $Root "anime_vfi.py") (Join-Path $ReleaseRoot "anime_vfi.py")
 Copy-Item -Force (Join-Path $Root "anime_vfi_gui.py") (Join-Path $ReleaseRoot "anime_vfi_gui.py")
 Copy-Item -Force (Join-Path $Root "offline_license.py") (Join-Path $ReleaseRoot "offline_license.py")
@@ -102,7 +142,7 @@ Get-ChildItem -Path $ReleaseRoot -Directory -Recurse -Force -Filter "__pycache__
 if ($SignFiles) {
     & (Join-Path $Root "sign_oniflow.ps1") -Paths @((Join-Path $ReleaseRoot "Oniflow.exe"))
 }
-& $Python (Join-Path $Root "integrity_admin.py") $ReleaseRoot
+& $Python $IntegrityAdmin $ReleaseRoot
 if ($LASTEXITCODE -ne 0) { throw "Signed integrity manifest creation failed." }
 & $Python (Join-Path $Root "release_audit.py") $ReleaseRoot
 if ($LASTEXITCODE -ne 0) { throw "Release security audit failed." }

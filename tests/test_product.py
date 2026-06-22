@@ -3,6 +3,7 @@ import tempfile
 import unittest
 import os
 import json
+import hashlib
 import inspect
 from pathlib import Path
 from unittest.mock import patch
@@ -15,7 +16,6 @@ import anime_vfi_gui
 import activation_server
 import release_audit
 import offline_license
-import offline_license_gui
 import runtime_security
 
 
@@ -189,42 +189,57 @@ class ProductTests(unittest.TestCase):
         self.assertEqual(offline_license.device_id(), offline_license.device_id())
         self.assertRegex(offline_license.device_id(), r"^[0-9A-F]{8}(?:-[0-9A-F]{8}){3}$")
 
-    def test_owner_license_gui_validates_device_id_and_stays_private(self):
-        self.assertEqual(
-            offline_license_gui.validate_device_id("fd8cac39-1b594a5b-b9e39eb5-796c885b"),
-            "FD8CAC39-1B594A5B-B9E39EB5-796C885B",
-        )
-        with self.assertRaises(ValueError):
-            offline_license_gui.validate_device_id("invalid-device")
-        self.assertEqual(offline_license_gui.safe_filename("Oniven Test"), "Oniven-Test")
-        self.assertTrue((ROOT / "Buat Lisensi Oniflow.vbs").is_file())
+    def test_owner_license_tools_stay_private(self):
+        gitignore = (ROOT / ".gitignore").read_text(encoding="utf-8")
+        for name in (
+            "Buat Lisensi Oniflow.vbs",
+            "buat_kunci_offline_license.ps1",
+            "buat_offline_license.ps1",
+            "integrity_admin.py",
+            "offline_license_admin.py",
+            "offline_license_gui.py",
+        ):
+            self.assertIn(name, gitignore)
         build_script = (ROOT / "build_release.ps1").read_text(encoding="utf-8")
+        self.assertNotIn("offline_license_admin.py", build_script)
         self.assertNotIn("offline_license_gui.py", build_script)
         self.assertNotIn("Buat Lisensi Oniflow.vbs", build_script)
 
-    def test_offline_license_signing_and_device_binding(self):
-        import offline_license_admin
-
+    def test_offline_license_verification_and_device_binding(self):
         with tempfile.TemporaryDirectory() as directory:
-            output = Path(directory) / "license.json"
-            args = type("Args", (), {
-                "private_key": ROOT / "private" / "offline-license-private.json",
-                "device_id": "AAAAAAAA-BBBBBBBB-CCCCCCCC-DDDDDDDD",
-                "name": "Test User",
-                "days": 30,
-                "output": output,
-            })()
-            offline_license_admin.create_license(args)
-            valid, _, payload = offline_license.verify_license(
-                output,
-                ROOT / "assets" / "offline-license-public.json",
-                "AAAAAAAA-BBBBBBBB-CCCCCCCC-DDDDDDDD",
+            root = Path(directory)
+            public_key = root / "public.json"
+            license_path = root / "license.json"
+            public_key.write_text("{}", encoding="utf-8")
+            license_path.write_text(
+                json.dumps(
+                    {
+                        "payload": {
+                            "product": "Oniflow",
+                            "license_id": "TEST",
+                            "licensed_to": "Test User",
+                            "device_id": "AAAAAAAA-BBBBBBBB-CCCCCCCC-DDDDDDDD",
+                            "issued_at": "2026-01-01T00:00:00+00:00",
+                            "expires_at": "",
+                        },
+                        "signature": "AA==",
+                    }
+                ),
+                encoding="utf-8",
             )
-            wrong_device, _, _ = offline_license.verify_license(
-                output,
-                ROOT / "assets" / "offline-license-public.json",
-                "11111111-22222222-33333333-44444444",
-            )
+            with patch.object(offline_license, "public_key_is_trusted", return_value=True), patch.object(
+                offline_license, "_rsa_verify", return_value=True
+            ):
+                valid, _, payload = offline_license.verify_license(
+                    license_path,
+                    public_key,
+                    "AAAAAAAA-BBBBBBBB-CCCCCCCC-DDDDDDDD",
+                )
+                wrong_device, _, _ = offline_license.verify_license(
+                    license_path,
+                    public_key,
+                    "11111111-22222222-33333333-44444444",
+                )
         self.assertTrue(valid)
         self.assertEqual(payload["licensed_to"], "Test User")
         self.assertFalse(wrong_device)
@@ -237,20 +252,37 @@ class ProductTests(unittest.TestCase):
             self.assertFalse(offline_license.public_key_is_trusted(modified))
 
     def test_signed_integrity_manifest_detects_modified_files(self):
-        import integrity_admin
-
         with tempfile.TemporaryDirectory() as directory:
             release = Path(directory)
-            for relative in integrity_admin.PROTECTED_FILES:
+            protected_files = (
+                "Oniflow.exe",
+                "anime_vfi.pyc",
+                "assets/offline-license-public.json",
+            )
+            file_hashes = {}
+            for relative in protected_files:
                 path = release / relative
                 path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text(f"protected:{relative}", encoding="utf-8")
-            public_key = release / "assets" / "offline-license-public.json"
-            public_key.write_bytes((ROOT / "assets" / "offline-license-public.json").read_bytes())
-            integrity_admin.create_manifest(release)
-            valid, _ = runtime_security.verify_integrity(release, require_manifest=True)
-            (release / "anime_vfi.pyc").write_text("modified", encoding="utf-8")
-            modified_valid, modified_message = runtime_security.verify_integrity(release, require_manifest=True)
+                if relative == "assets/offline-license-public.json":
+                    path.write_bytes((ROOT / "assets" / "offline-license-public.json").read_bytes())
+                else:
+                    path.write_text(f"protected:{relative}", encoding="utf-8")
+                file_hashes[relative] = hashlib.sha256(path.read_bytes()).hexdigest().upper()
+            manifest = {
+                "payload": {
+                    "product": "Oniflow",
+                    "created_at": "2026-01-01T00:00:00+00:00",
+                    "files": file_hashes,
+                },
+                "signature": "AA==",
+            }
+            (release / "integrity-manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+            with patch.object(runtime_security, "public_key_is_trusted", return_value=True), patch.object(
+                runtime_security, "_rsa_verify", return_value=True
+            ):
+                valid, _ = runtime_security.verify_integrity(release, require_manifest=True)
+                (release / "anime_vfi.pyc").write_text("modified", encoding="utf-8")
+                modified_valid, modified_message = runtime_security.verify_integrity(release, require_manifest=True)
         self.assertTrue(valid)
         self.assertFalse(modified_valid)
         self.assertIn("modified", modified_message)
@@ -264,6 +296,7 @@ class ProductTests(unittest.TestCase):
         self.assertIn("verify_runtime_access", pipeline)
         self.assertIn("verify_runtime_access", gui)
         self.assertIn("integrity_admin.py", (ROOT / "build_release.ps1").read_text(encoding="utf-8"))
+        self.assertIn("Owner-only integrity_admin.py is missing", (ROOT / "build_release.ps1").read_text(encoding="utf-8"))
         self.assertIn("py_compile.compile", (ROOT / "build_release.ps1").read_text(encoding="utf-8"))
 
     def test_launcher_allows_offline_license_import_screen(self):
@@ -364,13 +397,19 @@ class ProductTests(unittest.TestCase):
         certificate = (ROOT / "create_test_signing_certificate.ps1").read_text(encoding="utf-8")
         self.assertIn("-NativeLauncher", native)
         self.assertIn("-m nuitka", release)
-        self.assertLess(release.index("sign_oniflow.ps1"), release.index("integrity_admin.py"))
+        self.assertLess(release.index("sign_oniflow.ps1"), release.index("& $Python $IntegrityAdmin"))
         self.assertIn("nuitka ordered-set zstandard", setup)
         self.assertIn("Set-AuthenticodeSignature", signing)
         self.assertIn("New-SelfSignedCertificate", certificate)
         self.assertIn("$IconPath = Join-Path $Root", release)
         self.assertIn("$LauncherSource = Join-Path $Root", release)
         self.assertIn('-Filter "__pycache__"', release)
+        self.assertIn("$PrunedRuntimePackages", release)
+        self.assertIn("$PrunedRuntimePaths", release)
+        self.assertIn('"imageio_ffmpeg"', release)
+        self.assertIn('"tensorboard"', release)
+        self.assertIn('"Lib\\site-packages\\torch\\include"', release)
+        self.assertIn('-Filter "tests"', release)
 
 
 if __name__ == "__main__":

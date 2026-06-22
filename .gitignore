@@ -6,6 +6,14 @@ license.json
 user_settings.json
 runtime-config.json
 
+# Owner-only offline license tools. Keep these local, outside public GitHub.
+Buat Lisensi Oniflow.vbs
+buat_kunci_offline_license.ps1
+buat_offline_license.ps1
+integrity_admin.py
+offline_license_admin.py
+offline_license_gui.py
+
 work/
 release/
 dist/
