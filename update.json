@@ -1,6 +1,6 @@
 ﻿{
     "latest_version":  "0.9.3-beta",
     "download_url":  "https://github.com/ngetehhh/oniflow/releases/download/v0.9.3-beta/Oniflow-Setup-0.9.3-beta.exe",
-    "sha256":  "A017D5C519FAD0D1F6767A0F5F2D20A879649E618E5B6842D0247016B6242D13",
+    "sha256":  "35B27C029E30488CE8BA8093B79F5E143266FE60606628D16FEB4D41C93E735D",
     "release_notes":  "OTA-ready beta build. Adds GitHub update manifest support and keeps the existing Oniflow fixes."
 }
