@@ -75,6 +75,33 @@ $PrunedRuntimePackages = @(
     "matplotlib-*",
     "imageio_ffmpeg",
     "imageio_ffmpeg-*",
+    "absl",
+    "absl-*",
+    "cyclonedx",
+    "cyclonedx-*",
+    "fontTools",
+    "fonttools-*",
+    "fsspec",
+    "fsspec-*",
+    "google",
+    "grpc",
+    "grpcio-*",
+    "jinja2",
+    "jinja2-*",
+    "networkx",
+    "networkx-*",
+    "pygments",
+    "pygments-*",
+    "rawpy",
+    "rawpy-*",
+    "rich",
+    "rich-*",
+    "skimage",
+    "scikit_image-*",
+    "sympy",
+    "sympy-*",
+    "werkzeug",
+    "werkzeug-*",
     "pip",
     "pip-*",
     "setuptools",
@@ -94,6 +121,12 @@ foreach ($RuntimePath in $PrunedRuntimePaths) {
     Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $RuntimePath
 }
 Remove-Item -Recurse -Force -ErrorAction SilentlyContinue (Join-Path $SitePackages "skvideo\datasets\data")
+Get-ChildItem -Path $SitePackages -Recurse -Force -File -ErrorAction SilentlyContinue |
+    Where-Object {
+        $_.Name -like "*.dll.a" -or
+        $_.Extension -in @(".lib", ".h", ".hpp", ".pxd", ".pyx", ".whl")
+    } |
+    Remove-Item -Force
 Get-ChildItem -Path $SitePackages -Directory -Recurse -Force -Filter "tests" |
     Remove-Item -Recurse -Force
 Get-ChildItem -Path $SitePackages -Directory -Recurse -Force -Filter "test" |

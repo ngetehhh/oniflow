@@ -407,8 +407,12 @@ class ProductTests(unittest.TestCase):
         self.assertIn("$PrunedRuntimePackages", release)
         self.assertIn("$PrunedRuntimePaths", release)
         self.assertIn('"imageio_ffmpeg"', release)
+        self.assertIn('"rawpy"', release)
+        self.assertIn('"grpc"', release)
         self.assertIn('"tensorboard"', release)
         self.assertIn('"Lib\\site-packages\\torch\\include"', release)
+        self.assertIn('".whl"', release)
+        self.assertIn('".lib"', release)
         self.assertIn('-Filter "tests"', release)
 
 
