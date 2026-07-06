@@ -15,7 +15,7 @@ Paket ini disiapkan untuk pengujian bersama teman yang menggunakan jaringan Wi-F
 
 Bagikan hanya:
 
-`installer-output\Oniflow-Setup-0.9.3-beta.exe`
+`installer-output\Oniflow-Setup-0.9.4-beta.exe`
 
 Jangan bagikan folder proyek, `activation.db`, password admin, atau file server aktivasi.
 

@@ -107,6 +107,18 @@ parser.add_argument('--scene-threshold', dest='scene_threshold', type=float, def
                     help='hold the previous frame when mean normalized difference exceeds this value')
 parser.add_argument('--static-threshold', dest='static_threshold', type=float, default=0.002,
                     help='repeat held frames when mean normalized difference is below this value')
+parser.add_argument('--object-protection', dest='object_protection', action=argparse.BooleanOptionalAction,
+                    default=False, help='experimental: preserve fast moving objects in high-motion regions')
+parser.add_argument('--object-threshold', dest='object_threshold', type=float, default=0.08,
+                    help='per-pixel normalized difference that marks a high-motion object region')
+parser.add_argument('--object-min-area', dest='object_min_area', type=float, default=0.002,
+                    help='minimum changed image area required for object protection')
+parser.add_argument('--object-max-area', dest='object_max_area', type=float, default=0.45,
+                    help='maximum changed image area before the frame is treated as scene-like motion')
+parser.add_argument('--object-dilate', dest='object_dilate', type=int, default=9,
+                    help='dilate high-motion object masks to cover object edges')
+parser.add_argument('--object-feather', dest='object_feather', type=int, default=15,
+                    help='feather high-motion object masks to reduce hard edges')
 
 args = parser.parse_args()
 if args.exp != 1:
@@ -217,6 +229,43 @@ def build_read_buffer(user_args, read_buffer, videogen):
         pass
     read_buffer.put(None)
 
+def build_object_protection_mask(previous_frame, next_frame, user_args):
+    if not user_args.object_protection:
+        return None
+    if user_args.object_threshold <= 0:
+        return None
+    diff_map = np.mean(
+        np.abs(previous_frame.astype(np.float32) - next_frame.astype(np.float32)),
+        axis=2,
+    ) / 255.0
+    strong_motion = (diff_map >= user_args.object_threshold).astype(np.uint8)
+    changed_area = float(np.mean(strong_motion))
+    if changed_area < user_args.object_min_area or changed_area > user_args.object_max_area:
+        return None
+
+    dilate_size = max(1, int(user_args.object_dilate))
+    if dilate_size > 1:
+        kernel = np.ones((dilate_size, dilate_size), np.uint8)
+        strong_motion = cv2.dilate(strong_motion, kernel, iterations=1)
+
+    mask = strong_motion.astype(np.float32)
+    feather = max(0, int(user_args.object_feather))
+    if feather >= 3:
+        if feather % 2 == 0:
+            feather += 1
+        mask = cv2.GaussianBlur(mask, (feather, feather), 0)
+        peak = float(mask.max())
+        if peak > 0:
+            mask = mask / peak
+    return mask[:, :, None]
+
+def protect_interpolated_object(mid_frame, previous_frame, next_frame, mask, position, total_positions):
+    if mask is None:
+        return mid_frame
+    source_frame = previous_frame if position <= (total_positions / 2) else next_frame
+    protected = mid_frame.astype(np.float32) * (1.0 - mask) + source_frame.astype(np.float32) * mask
+    return np.clip(protected, 0, 255).astype(np.uint8)
+
 def make_inference(I0, I1, reuse_things, n):    
     global model
     if model.version >= 3.9:
@@ -279,9 +328,11 @@ while True:
     I1 = F.interpolate(I1, (ph, pw), mode='bilinear', align_corners=False)
     
     frame_difference = float(np.mean(np.abs(lastframe.astype(np.float32) - frame.astype(np.float32))) / 255.0)
+    protection_mask = None
     if frame_difference <= args.static_threshold or frame_difference >= args.scene_threshold:
         output = [I0] * (args.multi - 1)
     else:
+        protection_mask = build_object_protection_mask(lastframe, frame, args)
         amp_context = torch.autocast(device_type="cuda", dtype=torch.float16) if args.amp and torch.cuda.is_available() else nullcontext()
         with amp_context:
             reuse_things = model.reuse(I0, I1, args.scale)
@@ -289,14 +340,16 @@ while True:
 
     if args.montage:
         write_buffer.put(np.concatenate((lastframe, lastframe), 1))
-        for mid in output:
+        for index, mid in enumerate(output, start=1):
             mid = (((mid[0] * 255.).byte().cpu().numpy().transpose(1, 2, 0)))
+            mid = protect_interpolated_object(mid[:h, :w], lastframe, frame, protection_mask, index, args.multi)
             write_buffer.put(np.concatenate((lastframe, mid[:h, :w]), 1))
     else:
         write_buffer.put(lastframe)
-        for mid in output:
+        for index, mid in enumerate(output, start=1):
             mid = F.interpolate(mid, (h, w), mode='bilinear', align_corners=False)
             mid = (((mid[0] * 255.).byte().cpu().numpy().transpose(1, 2, 0)))
+            mid = protect_interpolated_object(mid, lastframe, frame, protection_mask, index, args.multi)
             write_buffer.put(mid)
     pbar.update(1)
     processed_frames += 1

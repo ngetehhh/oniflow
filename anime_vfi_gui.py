@@ -29,7 +29,7 @@ import customtkinter as ctk
 from PIL import Image
 from tkinterdnd2 import DND_FILES, TkinterDnD
 
-from anime_vfi import PipelineError, probe_video
+from anime_vfi import PipelineError, available_backends, backend_label, load_config, probe_video
 from offline_license import device_id as offline_device_id, verify_license
 from runtime_security import verify_integrity, verify_runtime_access
 
@@ -67,12 +67,13 @@ DEFAULT_SETTINGS = {
     "save_logs": True,
     "gpu_usage_limit": "100%",
     "default_profile": "Anime",
+    "default_backend": "GMFSS",
     "default_multiplier": "2x",
     "default_interpolation_quality": "Normal",
     "default_output_format": "MP4",
     "default_slow_motion": "Off",
 }
-APP_VERSION = "0.9.3-beta"
+APP_VERSION = "0.9.4-beta"
 ACCESS_FEATURE_ENABLED = False
 OFFLINE_LICENSE_REQUIRED = True
 FREE_DAILY_CLIP_LIMIT = 15
@@ -245,12 +246,17 @@ class AnimeVfiPro:
         self.started_at = 0.0
         self.paused = False
         self.device_caps: dict[str, object] = {}
+        self.available_backend_ids = available_backends(load_config(BASE_CONFIG_PATH))
+        self.backend_labels = {backend: backend_label(backend) for backend in self.available_backend_ids}
+        default_backend_label = str(self.settings.get("default_backend", self.backend_labels[self.available_backend_ids[0]]))
+        if default_backend_label not in self.backend_labels.values():
+            default_backend_label = self.backend_labels[self.available_backend_ids[0]]
         log_dir = APP_DATA_ROOT / "logs"
         log_dir.mkdir(parents=True, exist_ok=True)
         self.log_path = log_dir / f"oniflow-{time.strftime('%Y%m%d-%H%M%S')}.log"
 
         self.mode = ctk.StringVar(value=str(self.settings["default_profile"]))
-        self.model_name = ctk.StringVar(value="GMFSS")
+        self.model_name = ctk.StringVar(value=default_backend_label)
         self.multiplier = ctk.StringVar(value=str(self.settings["default_multiplier"]))
         self.output_dir = ctk.StringVar(value="")
         self.quality = ctk.StringVar(value=str(self.settings["default_interpolation_quality"]))
@@ -269,6 +275,7 @@ class AnimeVfiPro:
         self.root.after(250, lambda: threading.Thread(target=self._startup_device_check, daemon=True).start())
         self.root.after(200, self._lock_window_resize)
         self.mode.trace_add("write", self._mode_changed)
+        self.model_name.trace_add("write", self._mode_changed)
         self.root.after(100, self._poll_events)
         self.root.after(1000, self._start_gpu_update)
         self.root.protocol("WM_DELETE_WINDOW", self._close)
@@ -638,7 +645,7 @@ class AnimeVfiPro:
             unselected_hover_color="#273b59",
         )
         tabs.pack(fill="x", padx=12, pady=(0, 3))
-        self._field(profile_card, "Model", variable=self.model_name, compact=True)
+        self._field(profile_card, "Model", variable=self.model_name, options=list(self.backend_labels.values()), compact=True)
 
         interpolation_row = ctk.CTkFrame(profile_card, fg_color="transparent")
         interpolation_row.pack(fill="x", padx=8, pady=(0, 6))
@@ -796,6 +803,7 @@ class AnimeVfiPro:
             tab_content[name] = content
 
         option("Job Defaults", "default_profile", "Default Profile", ["Anime", "Human"])
+        option("Job Defaults", "default_backend", "Default Model", list(self.backend_labels.values()))
         option("Job Defaults", "default_multiplier", "Default FPS Multiplier", ["2x", "4x", "6x", "8x", "10x"])
         option(
             "Job Defaults",
@@ -1210,6 +1218,10 @@ class AnimeVfiPro:
 
     def _apply_job_defaults(self) -> None:
         self.mode.set(str(self.settings["default_profile"]))
+        default_backend = str(self.settings.get("default_backend", self.backend_labels[self.available_backend_ids[0]]))
+        if default_backend not in self.backend_labels.values():
+            default_backend = self.backend_labels[self.available_backend_ids[0]]
+        self.model_name.set(default_backend)
         self.multiplier.set(str(self.settings["default_multiplier"]))
         self.quality.set(str(self.settings["default_interpolation_quality"]))
         self.output_format.set(str(self.settings["default_output_format"]))
@@ -1418,12 +1430,11 @@ class AnimeVfiPro:
             entry.pack(fill="x", padx=horizontal_padding)
 
     def _mode_changed(self, *_args: object) -> None:
+        selected_backend = self.model_name.get()
         if self.mode.get() == "Anime":
-            self.model_name.set("GMFSS")
-            self._log("Profile selected: Anime | Model: GMFSS")
+            self._log(f"Profile selected: Anime | Model: {selected_backend}")
         else:
-            self.model_name.set("GMFSS")
-            self._log("Profile selected: Human | Model: GMFSS")
+            self._log(f"Profile selected: Human | Model: {selected_backend}")
 
     def choose_files(self) -> None:
         paths = filedialog.askopenfilenames(
@@ -1649,6 +1660,10 @@ class AnimeVfiPro:
         self.cancel_button.configure(state="normal")
         self.pause_button.configure(state="normal", text="Pause")
         job_config = {
+            "backend": next(
+                (backend for backend, label in self.backend_labels.items() if label == self.model_name.get()),
+                self.available_backend_ids[0],
+            ),
             "mode": "anime" if self.mode.get() == "Anime" else "live-action",
             "extension": self.output_format.get().lower(),
             "multiplier": self.multiplier.get().removesuffix("x"),
@@ -1665,6 +1680,7 @@ class AnimeVfiPro:
         queue_snapshot = list(self.items)
         total_files = len(queue_snapshot)
         mode = str(job_config["mode"])
+        backend = str(job_config["backend"])
         extension = str(job_config["extension"])
         multiplier = str(job_config["multiplier"])
         slow_motion_factor = str(job_config["slow_motion_factor"])
@@ -1690,6 +1706,7 @@ class AnimeVfiPro:
                 pipeline = ROOT / ("anime_vfi.pyc" if (ROOT / "anime_vfi.pyc").is_file() else "anime_vfi.py")
                 command = [
                     str(self._pipeline_python()), str(pipeline), "run", str(item.path), str(output),
+                    "--backend", backend,
                     "--mode", mode, "--multiplier", multiplier,
                     "--scale", str(job_config["scale"]),
                     "--config", str(runtime_config),
@@ -1776,10 +1793,13 @@ class AnimeVfiPro:
     def _write_runtime_config(self) -> Path:
         config = json.loads(BASE_CONFIG_PATH.read_text(encoding="utf-8"))
         if not self.settings["mixed_precision"]:
-            for profile in ("gmfss_anime", "gmfss_live_action"):
-                config[profile]["command"] = [
-                    argument for argument in config[profile]["command"] if argument != "--amp"
-                ]
+            for backend in available_backends(config):
+                for profile in (f"{backend}_anime", f"{backend}_live_action"):
+                    if profile not in config:
+                        continue
+                    config[profile]["command"] = [
+                        argument for argument in config[profile]["command"] if argument != "--amp"
+                    ]
         codecs = {"AV1": "av1_nvenc", "HEVC": "hevc_nvenc", "H.264": "h264_nvenc"}
         quality_values = {"High Quality (CQ 14)": 14, "Balanced (CQ 18)": 18, "Small File (CQ 23)": 23}
         selected_codec = str(self.settings["video_codec"])

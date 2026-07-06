@@ -16,6 +16,15 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(MODULE.resolve_motion_scale(3840, 2160, 1.0, "auto"), 0.5)
         self.assertEqual(MODULE.resolve_motion_scale(1920, 1080, 1.0, "auto"), 1.0)
         self.assertEqual(MODULE.resolve_motion_scale(3840, 2160, 1.0, "full"), 1.0)
+        self.assertEqual(MODULE.resolve_motion_scale(1920, 1080, 1.0, "auto", 10), 1.0)
+        self.assertEqual(MODULE.resolve_motion_scale(1920, 1080, 0.75, "auto", 10), 0.75)
+        self.assertEqual(MODULE.resolve_motion_scale(1920, 1080, 1.0, "auto", 8), 1.0)
+        self.assertEqual(MODULE.resolve_motion_scale(1920, 1080, 1.0, "auto", 6), 1.0)
+        self.assertEqual(MODULE.resolve_motion_scale(1920, 1080, 0.5, "auto", 6), 0.5)
+        self.assertEqual(MODULE.resolve_motion_scale(1920, 1080, 1.0, "auto", 10, "extreme"), 0.25)
+        self.assertEqual(MODULE.resolve_motion_scale(1920, 1080, 1.0, "auto", 8, "extreme"), 0.5)
+        self.assertEqual(MODULE.resolve_motion_scale(1920, 1080, 1.0, "auto", 6, "extreme"), 0.5)
+        self.assertEqual(MODULE.resolve_motion_scale(1920, 1080, 1.0, "auto", 4, "extreme"), 0.75)
 
     def test_render_template(self):
         result = MODULE.render_template(
@@ -23,6 +32,17 @@ class CoreTests(unittest.TestCase):
             {"input": "a b.mkv", "multiplier": "2"},
         )
         self.assertEqual(result, ["engine", "--input", "a b.mkv", "--multi", "2"])
+
+    def test_available_backends_detects_configured_pairs(self):
+        config = {
+            "gmfss_anime": {"command": ["python", "a.py"]},
+            "gmfss_live_action": {"command": ["python", "b.py"]},
+            "rife_anime": {"command": ["python", "c.py"]},
+            "rife_live_action": {"command": ["python", "d.py"]},
+        }
+        self.assertEqual(MODULE.available_backends(config), ["gmfss", "rife"])
+        self.assertEqual(MODULE.backend_label("gmfss"), "GMFSS")
+        self.assertEqual(MODULE.backend_label("rife"), "RIFE")
 
     def test_render_template_rejects_unknown_placeholder(self):
         with self.assertRaises(MODULE.PipelineError):
@@ -39,10 +59,14 @@ class CoreTests(unittest.TestCase):
                 "10",
                 "--mode",
                 "live-action",
+                "--backend",
+                "gmfss",
                 "--slow-motion-factor",
                 "8",
                 "--uhd-mode",
                 "memory",
+                "--motion-profile",
+                "extreme",
                 "--throttle-ms",
                 "15",
             ]
@@ -50,9 +74,11 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(args.multiplier, 10)
         self.assertIsNone(args.fps)
         self.assertEqual(args.mode, "live-action")
+        self.assertEqual(args.backend, "gmfss")
         self.assertEqual(args.scale, 1.0)
         self.assertEqual(args.slow_motion_factor, 8)
         self.assertEqual(args.uhd_mode, "memory")
+        self.assertEqual(args.motion_profile, "extreme")
         self.assertEqual(args.throttle_ms, 15)
 
     def test_pipeline_forwards_throttle_to_gmfss(self):

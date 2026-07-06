@@ -40,6 +40,26 @@ class VideoInfo:
     has_subtitles: bool
 
 
+def backend_label(backend: str) -> str:
+    labels = {
+        "gmfss": "GMFSS",
+        "rife": "RIFE",
+    }
+    return labels.get(backend.lower(), backend.replace("_", " ").upper())
+
+
+def available_backends(config: dict[str, Any]) -> list[str]:
+    found: list[str] = []
+    for key, value in config.items():
+        if not isinstance(value, dict):
+            continue
+        if key.endswith("_anime"):
+            backend = key[: -len("_anime")]
+            if f"{backend}_live_action" in config and backend not in found:
+                found.append(backend)
+    return found or ["gmfss"]
+
+
 def run_command(
     command: list[str],
     capture: bool = False,
@@ -95,28 +115,51 @@ def parse_rate(value: str) -> float:
         raise PipelineError(f"Frame rate tidak valid: {value}") from exc
 
 
-def resolve_motion_scale(width: int, height: int, requested_scale: float, uhd_mode: str) -> float:
+def resolve_motion_scale(
+    width: int,
+    height: int,
+    requested_scale: float,
+    uhd_mode: str,
+    multiplier: int = 2,
+    motion_profile: str = "standard",
+) -> float:
     is_4k = width >= 3840 or height >= 2160
     if uhd_mode == "memory" or (uhd_mode == "auto" and is_4k):
         return min(requested_scale, 0.5)
+
+    if motion_profile == "extreme":
+        if multiplier >= 10:
+            return min(requested_scale, 0.25)
+        if multiplier >= 8:
+            return min(requested_scale, 0.5)
+        if multiplier >= 6:
+            return min(requested_scale, 0.5)
+        return min(requested_scale, 0.75)
+
     return requested_scale
 
 
 def probe_video(path: Path) -> VideoInfo:
     ffprobe = require_tool("ffprobe")
-    result = run_command(
-        [
-            ffprobe,
-            "-v",
-            "error",
-            "-show_streams",
-            "-show_format",
-            "-of",
-            "json",
-            str(path),
-        ],
-        capture=True,
-    )
+    try:
+        result = run_command(
+            [
+                ffprobe,
+                "-v",
+                "error",
+                "-show_streams",
+                "-show_format",
+                "-of",
+                "json",
+                str(path),
+            ],
+            capture=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        details = str(exc.stderr or exc.output or "").strip()
+        if details:
+            details = "\n" + details[-1200:]
+        raise PipelineError(f"ffprobe gagal membaca video: {path}{details}") from exc
     data = json.loads(result.stdout)
     video = next((s for s in data["streams"] if s["codec_type"] == "video"), None)
     if not video:
@@ -304,6 +347,7 @@ def mux_final(
     output: Path,
     config: dict[str, Any],
     slow_motion_factor: int = 1,
+    source_info: VideoInfo | None = None,
 ) -> None:
     print("VFI_STAGE mux", flush=True)
     ffmpeg = require_tool("ffmpeg")
@@ -314,7 +358,9 @@ def mux_final(
     preserve_subtitles = config.get("preserve_subtitles", True)
     is_mp4 = output.suffix.lower() == ".mp4"
     slow_motion = slow_motion_factor > 1
-    source_info = probe_video(source)
+    source_available = source.is_file()
+    if source_info is None:
+        source_info = probe_video(source)
     silent_info = probe_video(silent_video)
     command = [
         ffmpeg,
@@ -322,40 +368,68 @@ def mux_final(
         "-hide_banner",
         "-i",
         str(silent_video),
-        "-i",
-        str(source),
+    ]
+    if source_available:
+        command.extend(["-i", str(source)])
+    elif not mute_audio or preserve_metadata:
+        print("VFI_NOTICE source video is unavailable during mux; output will omit source audio and metadata", flush=True)
+    command.extend([
         "-map",
         "0:v:0",
-        "-c:v",
-        encoder.get("codec", "av1_nvenc"),
-        "-preset",
-        encoder.get("preset", "p6"),
-        "-cq",
-        str(encoder.get("cq", 18)),
-        "-pix_fmt",
-        encoder.get("pixel_format", "p010le"),
-    ]
+    ])
+    codec = encoder.get("codec", "prores_ks")
+    command.extend(["-c:v", codec])
+    if codec == "prores_ks":
+        command.extend([
+            "-profile:v",
+            str(encoder.get("profile", "4444xq")),
+            "-pix_fmt",
+            encoder.get("pixel_format", "yuv444p10le"),
+        ])
+        if encoder.get("bits_per_mb"):
+            command.extend(["-bits_per_mb", str(encoder["bits_per_mb"])])
+    else:
+        command.extend([
+            "-preset",
+            encoder.get("preset", "p7"),
+            "-cq",
+            str(encoder.get("cq", 10)),
+            "-pix_fmt",
+            encoder.get("pixel_format", "p010le"),
+        ])
+        if encoder.get("tune"):
+            command.extend(["-tune", str(encoder["tune"])])
+        if encoder.get("multipass"):
+            command.extend(["-multipass", str(encoder["multipass"])])
+        if encoder.get("bitrate"):
+            command.extend(["-b:v", str(encoder["bitrate"])])
+        if encoder.get("maxrate"):
+            command.extend(["-maxrate", str(encoder["maxrate"])])
+        if encoder.get("bufsize"):
+            command.extend(["-bufsize", str(encoder["bufsize"])])
     video_filters: list[str] = []
     if (silent_info.width, silent_info.height) != (source_info.width, source_info.height):
         video_filters.append(f"scale={source_info.width}:{source_info.height}:flags=lanczos")
     if slow_motion:
-        output_fps = silent_info.fps / slow_motion_factor
+        output_fps = source_info.fps
         video_filters.append(f"setpts={slow_motion_factor}*PTS")
         command.extend(["-r", f"{output_fps:.8f}"])
     if video_filters:
         command.extend(["-filter:v", ",".join(video_filters)])
-    if not mute_audio:
+    if not mute_audio and source_available:
         command.extend(["-map", "1:a?"])
-    if preserve_metadata:
+    if preserve_metadata and source_available:
         command.extend(["-map_metadata", "1"])
-    if mute_audio:
+    if mute_audio or not source_available:
         command.append("-an")
         if is_mp4:
             command.extend(["-movflags", "+faststart"])
     elif slow_motion:
-        command.extend(["-filter:a", atempo_filter(1 / slow_motion_factor), "-c:a", "aac", "-q:a", "2"])
+        command.extend(["-filter:a", atempo_filter(1 / slow_motion_factor), "-c:a", "aac", "-b:a", str(audio.get("slowmo_bitrate", "320k"))])
     elif is_mp4:
         command.extend(["-c:a", "copy", "-movflags", "+faststart"])
+    elif output.suffix.lower() == ".mov":
+        command.extend(["-c:a", "pcm_s16le"])
     else:
         if preserve_subtitles and not slow_motion:
             command.extend(["-map", "1:s?", "-c:s", "copy"])
@@ -364,7 +438,7 @@ def mux_final(
     try:
         run_command(command)
     except subprocess.CalledProcessError:
-        if not is_mp4 or mute_audio or slow_motion:
+        if not is_mp4 or mute_audio or slow_motion or not source_available or "-c:a" not in command:
             raise
         print("VFI_NOTICE source audio is not MP4-compatible; falling back to AAC", flush=True)
         fallback = list(command)
@@ -386,6 +460,7 @@ def interpolate_gmfss(
     output_path: Path,
     target_fps: float,
     config: dict[str, Any],
+    backend: str,
     mode: str,
     scale: float,
     scene_threshold: float | None,
@@ -395,12 +470,15 @@ def interpolate_gmfss(
     slow_motion_factor: int,
     uhd_mode: str,
     throttle_ms: int,
+    motion_profile: str,
 ) -> None:
-    profile_name = "gmfss_anime" if mode == "anime" else "gmfss_live_action"
-    engine = config.get(profile_name) or config.get("gmfss", {})
+    profile_name = f"{backend}_{'anime' if mode == 'anime' else 'live_action'}"
+    engine = config.get(profile_name) or config.get(backend, {})
     template = engine.get("command")
     if not isinstance(template, list) or not template:
-        raise PipelineError("Isi gmfss.command di config.json dengan perintah implementasi GMFSS Anda.")
+        raise PipelineError(
+            f"Isi {profile_name}.command di config.json dengan perintah implementasi {backend_label(backend)} Anda."
+        )
     temp_owner = None
     if temp_root:
         temp_root.mkdir(parents=True, exist_ok=True)
@@ -410,18 +488,23 @@ def interpolate_gmfss(
         temp_owner = tempfile.TemporaryDirectory(prefix="anime-vfi-", dir=temp_root)
         temp_dir = Path(temp_owner.name)
     info = probe_video(input_path)
-    requested_scale = scale
-    scale = resolve_motion_scale(info.width, info.height, requested_scale, uhd_mode)
-    if uhd_mode == "memory" and scale != requested_scale:
-        print("VFI_NOTICE memory-saver processing uses motion scale 0.5", flush=True)
-    elif uhd_mode == "auto" and scale != requested_scale:
-        print("VFI_NOTICE 4K input detected; using protected motion scale 0.5", flush=True)
     multiplier = round(target_fps / info.fps)
     if multiplier < 2 or abs(info.fps * multiplier - target_fps) > 0.02:
         raise PipelineError(
             "GMFSS membutuhkan pengali FPS integer. "
             "Gunakan --multiplier, misalnya --multiplier 10."
         )
+    requested_scale = scale
+    scale = resolve_motion_scale(info.width, info.height, requested_scale, uhd_mode, multiplier, motion_profile)
+    if uhd_mode == "memory" and scale != requested_scale:
+        print("VFI_NOTICE memory-saver processing uses motion scale 0.5", flush=True)
+    elif scale != requested_scale:
+        if info.width >= 3840 or info.height >= 2160:
+            print("VFI_NOTICE 4K input detected; using protected motion scale 0.5", flush=True)
+        elif motion_profile == "extreme" and multiplier >= 10:
+            print("VFI_NOTICE extreme motion profile detected; using protected motion scale 0.25", flush=True)
+        elif motion_profile == "extreme" and multiplier >= 6:
+            print("VFI_NOTICE extreme motion profile detected; using protected motion scale 0.5", flush=True)
     silent_video = temp_dir / f"gmfss_silent.{engine.get('output_extension', 'mp4')}"
     values = {
         "project_root": str(Path(__file__).resolve().parent),
@@ -477,7 +560,7 @@ def interpolate_gmfss(
             "Engine menghasilkan resolusi yang berbeda dari input: "
             f"{silent_info.width}x{silent_info.height} != {info.width}x{info.height}"
         )
-    mux_final(silent_video, input_path, output_path, config, slow_motion_factor)
+    mux_final(silent_video, input_path, output_path, config, slow_motion_factor, info)
     if keep_temp:
         print(f"File sementara dipertahankan: {temp_dir}")
     if temp_owner:
@@ -531,6 +614,7 @@ def build_parser() -> argparse.ArgumentParser:
     target_group.add_argument("--fps", type=float, help="FPS tujuan. Harus merupakan pengali integer FPS sumber.")
     target_group.add_argument("--multiplier", type=int, default=2, help="Pengali FPS. Nilai bawaan: 2.")
     run_parser.add_argument("--engine", choices=["gmfss", "preview"], default="gmfss")
+    run_parser.add_argument("--backend", default="gmfss", help="Backend interpolasi yang tersedia di config.json.")
     run_parser.add_argument("--mode", choices=["anime", "live-action"], default="anime")
     run_parser.add_argument("--scale", type=float, choices=[0.5, 0.75, 1.0], default=1.0)
     run_parser.add_argument("--scene-threshold", type=float)
@@ -551,6 +635,12 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["auto", "full", "memory"],
         default="auto",
         help="Strategi VRAM untuk video resolusi tinggi.",
+    )
+    run_parser.add_argument(
+        "--motion-profile",
+        choices=["standard", "extreme"],
+        default="standard",
+        help="Profil proteksi gerak. Extreme lebih agresif menurunkan motion scale untuk mengurangi ghosting.",
     )
     return parser
 
@@ -575,11 +665,18 @@ def main() -> int:
             if args.engine == "preview":
                 interpolate_preview(args.input, args.output, target_fps)
             else:
+                config = load_config(args.config)
+                backend = str(args.backend).strip().lower()
+                backends = available_backends(config)
+                if backend not in backends:
+                    supported = ", ".join(backend_label(name) for name in backends)
+                    raise PipelineError(f"Backend '{args.backend}' tidak tersedia. Backend aktif: {supported}.")
                 interpolate_gmfss(
                     args.input,
                     args.output,
                     target_fps,
-                    load_config(args.config),
+                    config,
+                    backend,
                     args.mode,
                     args.scale,
                     args.scene_threshold,
@@ -589,6 +686,7 @@ def main() -> int:
                     args.slow_motion_factor,
                     args.uhd_mode,
                     args.throttle_ms,
+                    args.motion_profile,
                 )
         return 0
     except (PipelineError, subprocess.CalledProcessError) as exc:

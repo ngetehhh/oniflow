@@ -1,3 +1,17 @@
+# Backend Setup
+
+Oniflow now detects interpolation backends from `config.json`.
+
+## Required config shape
+
+Each backend must provide two profiles:
+
+- `<backend>_anime`
+- `<backend>_live_action`
+
+Example:
+
+```json
 {
   "gmfss_anime": {
     "cwd": "work\\GMFSS_Fortuna",
@@ -16,9 +30,7 @@
       "--multi",
       "{multiplier}",
       "--scale",
-      "{scale}",
-      "--union",
-      "--amp"
+      "{scale}"
     ]
   },
   "gmfss_live_action": {
@@ -38,20 +50,28 @@
       "--multi",
       "{multiplier}",
       "--scale",
-      "{scale}",
-      "--union",
-      "--amp"
+      "{scale}"
     ]
-  },
-  "encoder": {
-    "codec": "av1_nvenc",
-    "preset": "p6",
-    "cq": 18,
-    "pixel_format": "p010le"
-  },
-  "audio": {
-    "mp4_fallback_codec": "aac",
-    "copy_for_mkv": true,
-    "mute": false
   }
 }
+```
+
+## Supported placeholders
+
+- `{project_root}`
+- `{input}`
+- `{output}`
+- `{target_fps}`
+- `{multiplier}`
+- `{scale}`
+- `{temp_dir}`
+
+## UI behavior
+
+If a backend has both profiles, it appears automatically in the Oniflow model selector.
+
+## Current status
+
+- `GMFSS` is active
+- second backend infrastructure is ready
+- no second backend weights or runtime are bundled yet

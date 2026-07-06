@@ -1,6 +1,6 @@
 ﻿{
-    "latest_version":  "0.9.3-beta",
-    "download_url":  "https://github.com/ngetehhh/oniflow/releases/download/v0.9.3-beta/Oniflow-Setup-0.9.3-beta.exe",
-    "sha256":  "62176CF3D70364D04AC900F09A0C20AC9722214AC1FDDA54A7C4761247C77D58",
-    "release_notes":  "OTA-ready beta build. Adds GitHub update manifest support and keeps the existing Oniflow fixes."
+    "latest_version":  "0.9.4-beta",
+    "download_url":  "https://github.com/ngetehhh/oniflow/releases/download/v0.9.4-beta/Oniflow-Setup-0.9.4-beta.exe",
+    "sha256":  "A4B6B7A6BA2CF8A17FD67DDFEFB2FEA05A1AC8DACCB0775DE1D9EEDD02FD10F4",
+    "release_notes":  "Keeps the best GMFSS baseline behavior, disables risky object protection by default, and adds backend selection infrastructure for future interpolation models."
 }
