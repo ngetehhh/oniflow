@@ -118,7 +118,7 @@ def load_update_config(path: Path = UPDATE_CONFIG_PATH) -> dict[str, str]:
 
 def fetch_update_manifest(manifest_url: str, timeout: int = 12) -> dict[str, str]:
     with urllib.request.urlopen(manifest_url, timeout=timeout) as response:
-        data = json.loads(response.read().decode("utf-8"))
+        data = json.loads(response.read().decode("utf-8-sig"))
     return {
         "latest_version": str(data["latest_version"]).strip(),
         "download_url": str(data["download_url"]).strip(),
