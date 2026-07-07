@@ -1,4 +1,4 @@
 {
-  "manifest_url": "https://raw.githubusercontent.com/ngetehhh/oniflow/main/update.json",
+  "manifest_url": "https://github.com/ngetehhh/oniflow/releases/download/v0.9.5-beta/update.json",
   "channel": "beta"
 }

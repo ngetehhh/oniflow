@@ -72,6 +72,8 @@ class ProductTests(unittest.TestCase):
         self.assertIn("_maybe_auto_check_for_updates", gui)
         self.assertIn('"Check for updates automatically"', gui)
         self.assertIn("automatic: bool = False", gui)
+        self.assertIn("UPDATE_REQUEST_HEADERS", gui)
+        self.assertIn("friendly_update_error", gui)
 
     def test_job_defaults_are_available_and_applied(self):
         source = (ROOT / "anime_vfi_gui.py").read_text(encoding="utf-8")

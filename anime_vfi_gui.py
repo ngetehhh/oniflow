@@ -77,6 +77,10 @@ DEFAULT_SETTINGS = {
     "default_slow_motion": "Off",
 }
 APP_VERSION = "0.9.5-beta"
+UPDATE_REQUEST_HEADERS = {
+    "Accept": "application/json, text/plain, */*",
+    "User-Agent": f"Oniflow/{APP_VERSION}",
+}
 ACCESS_FEATURE_ENABLED = False
 OFFLINE_LICENSE_REQUIRED = True
 FREE_DAILY_CLIP_LIMIT = 15
@@ -117,7 +121,8 @@ def load_update_config(path: Path = UPDATE_CONFIG_PATH) -> dict[str, str]:
 
 
 def fetch_update_manifest(manifest_url: str, timeout: int = 12) -> dict[str, str]:
-    with urllib.request.urlopen(manifest_url, timeout=timeout) as response:
+    request = urllib.request.Request(manifest_url, headers=UPDATE_REQUEST_HEADERS)
+    with urllib.request.urlopen(request, timeout=timeout) as response:
         data = json.loads(response.read().decode("utf-8-sig"))
     return {
         "latest_version": str(data["latest_version"]).strip(),
@@ -125,6 +130,15 @@ def fetch_update_manifest(manifest_url: str, timeout: int = 12) -> dict[str, str
         "sha256": str(data["sha256"]).strip().upper(),
         "release_notes": str(data.get("release_notes", "")).strip(),
     }
+
+
+def friendly_update_error(exc: Exception) -> str:
+    if isinstance(exc, urllib.error.HTTPError) and exc.code == 429:
+        return (
+            "GitHub is temporarily limiting update checks. "
+            "Please wait a few minutes, then try Check for Updates again."
+        )
+    return str(exc)
 
 
 def download_update_installer(update: dict[str, str], output_dir: Path) -> Path:
@@ -2012,7 +2026,8 @@ class AnimeVfiPro:
                 return
             self.root.after(0, lambda: self._confirm_update(update, parent))
         except Exception as exc:
-            message = str(exc)
+            self._record_update_check()
+            message = friendly_update_error(exc)
             self.events.put(("log", f"Update check failed: {message}"))
             if not automatic:
                 self.root.after(0, lambda: messagebox.showerror("Oniflow Update", message, parent=parent))
