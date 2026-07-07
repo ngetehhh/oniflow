@@ -1702,7 +1702,8 @@ class AnimeVfiPro:
         try:
             if total_files > 1:
                 batch_jobs: list[dict[str, str]] = []
-                batch_outputs: dict[QueueItem, Path] = {}
+                batch_outputs: list[tuple[QueueItem, Path]] = []
+                manifest: Path | None = None
                 for item in queue_snapshot:
                     input_info = probe_video(item.path)
                     output = self._unique_output(
@@ -1715,111 +1716,113 @@ class AnimeVfiPro:
                             int(slow_motion_factor),
                         )
                     )
-                    batch_outputs[item] = output
+                    batch_outputs.append((item, output))
                     batch_jobs.append({"input": str(item.path), "output": str(output)})
-                APP_DATA_ROOT.mkdir(parents=True, exist_ok=True)
-                manifest = APP_DATA_ROOT / f"batch-{uuid.uuid4().hex}.json"
-                manifest.write_text(json.dumps(batch_jobs, indent=2), encoding="utf-8")
-                pipeline = ROOT / ("anime_vfi.pyc" if (ROOT / "anime_vfi.pyc").is_file() else "anime_vfi.py")
-                command = [
-                    str(self._pipeline_python()), str(pipeline), "batch", str(manifest),
-                    "--backend", backend,
-                    "--mode", mode, "--multiplier", multiplier,
-                    "--scale", str(job_config["scale"]),
-                    "--config", str(runtime_config),
-                    "--uhd-mode",
-                    {
-                        "Auto (Recommended)": "auto",
-                        "Full Resolution": "full",
-                        "Memory Saver": "memory",
-                    }[str(self.settings["uhd_mode"])],
-                ]
-                if slow_motion_factor != "1":
-                    command.extend(["--slow-motion-factor", slow_motion_factor])
-                throttle_ms = {"100%": 0, "80%": 5, "60%": 15, "40%": 30}[str(self.settings["gpu_usage_limit"])]
-                if throttle_ms:
-                    command.extend(["--throttle-ms", str(throttle_ms)])
-                if self.settings["scene_protection"]:
-                    command.extend(["--scene-threshold", str(self.settings["scene_threshold"])])
-                else:
-                    command.extend(["--scene-threshold", "2.0"])
-                if self.settings["held_frame_protection"]:
-                    command.extend(["--static-threshold", str(self.settings["static_threshold"])])
-                else:
-                    command.extend(["--static-threshold", "-1.0"])
-                if self.settings["temp_dir"]:
-                    command.extend(["--temp-dir", str(self.settings["temp_dir"])])
-                if not self.settings["delete_cache"]:
-                    command.append("--keep-temp")
-                self.events.put(("log", f"Starting GMFSS batch interpolation for {total_files} video(s)..."))
-                current_index = 0
-                queue_snapshot[0].status = "Processing"
-                self.events.put(("render", None))
-                self.events.put(("render_status", None))
-                self.process = subprocess.Popen(
-                    command, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                    text=True, encoding="utf-8", errors="replace", bufsize=1,
-                    env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
-                    creationflags=subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP,
-                )
-                assert self.process.stdout
-                for line in self.process.stdout:
-                    clean = line.strip()
-                    if clean:
-                        friendly = self._friendly_error(clean)
-                        self.events.put(("log", friendly))
-                    batch_match = re.search(r"VFI_BATCH_ITEM\s+(\d+)\s+(\d+)", clean)
-                    if batch_match:
-                        current_index = max(0, int(batch_match.group(1)) - 1)
-                        for previous in queue_snapshot[:current_index]:
-                            if previous.status == "Processing":
-                                previous.status = "Queued"
-                        queue_snapshot[current_index].status = "Processing"
-                        self.events.put(("status", f"Processing {current_index + 1}/{total_files}: {queue_snapshot[current_index].path.name}"))
-                        self.events.put(("render", None))
-                        self.events.put(("render_status", None))
-                    match = PROGRESS_RE.search(clean)
-                    if match:
-                        current, total = map(int, match.groups())
-                        file_progress = min(current / max(total, 1), 1.0)
-                        overall = (current_index + file_progress) / total_files
-                        self.events.put(("progress", overall))
-                return_code = self.process.wait()
-                self.process = None
-                manifest.unlink(missing_ok=True)
-                if self.cancelled:
-                    for item in queue_snapshot:
-                        if item.status in {"Queued", "Processing"}:
-                            item.status = "Cancelled"
-                elif return_code == 0:
-                    for item in queue_snapshot:
-                        output = batch_outputs[item]
-                        item.status = "Success"
-                        if ACCESS_FEATURE_ENABLED:
-                            self.events.put(("access_success", None))
-                        try:
-                            result_info = probe_video(output)
-                            elapsed = time.monotonic() - self.started_at
-                            size_mb = output.stat().st_size / 1024**2
-                            self.events.put((
-                                "log",
-                                f"Result: {output.name} | {result_info.width}x{result_info.height} | "
-                                f"{result_info.fps:.3f} FPS | {result_info.duration:.2f}s | {size_mb:.1f} MB | "
-                                f"elapsed {elapsed:.1f}s | {output}",
-                            ))
-                        except Exception as exc:
+                try:
+                    APP_DATA_ROOT.mkdir(parents=True, exist_ok=True)
+                    manifest = APP_DATA_ROOT / f"batch-{uuid.uuid4().hex}.json"
+                    manifest.write_text(json.dumps(batch_jobs, indent=2), encoding="utf-8")
+                    pipeline = ROOT / ("anime_vfi.pyc" if (ROOT / "anime_vfi.pyc").is_file() else "anime_vfi.py")
+                    command = [
+                        str(self._pipeline_python()), str(pipeline), "batch", str(manifest),
+                        "--backend", backend,
+                        "--mode", mode, "--multiplier", multiplier,
+                        "--scale", str(job_config["scale"]),
+                        "--config", str(runtime_config),
+                        "--uhd-mode",
+                        {
+                            "Auto (Recommended)": "auto",
+                            "Full Resolution": "full",
+                            "Memory Saver": "memory",
+                        }[str(self.settings["uhd_mode"])],
+                    ]
+                    if slow_motion_factor != "1":
+                        command.extend(["--slow-motion-factor", slow_motion_factor])
+                    throttle_ms = {"100%": 0, "80%": 5, "60%": 15, "40%": 30}[str(self.settings["gpu_usage_limit"])]
+                    if throttle_ms:
+                        command.extend(["--throttle-ms", str(throttle_ms)])
+                    if self.settings["scene_protection"]:
+                        command.extend(["--scene-threshold", str(self.settings["scene_threshold"])])
+                    else:
+                        command.extend(["--scene-threshold", "2.0"])
+                    if self.settings["held_frame_protection"]:
+                        command.extend(["--static-threshold", str(self.settings["static_threshold"])])
+                    else:
+                        command.extend(["--static-threshold", "-1.0"])
+                    if self.settings["temp_dir"]:
+                        command.extend(["--temp-dir", str(self.settings["temp_dir"])])
+                    if not self.settings["delete_cache"]:
+                        command.append("--keep-temp")
+                    self.events.put(("log", f"Starting GMFSS batch interpolation for {total_files} video(s)..."))
+                    current_index = 0
+                    queue_snapshot[0].status = "Processing"
+                    self.events.put(("render", None))
+                    self.events.put(("render_status", None))
+                    self.process = subprocess.Popen(
+                        command, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                        text=True, encoding="utf-8", errors="replace", bufsize=1,
+                        env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+                        creationflags=subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP,
+                    )
+                    assert self.process.stdout
+                    for line in self.process.stdout:
+                        clean = line.strip()
+                        if clean:
+                            friendly = self._friendly_error(clean)
+                            self.events.put(("log", friendly))
+                        batch_match = re.search(r"VFI_BATCH_ITEM\s+(\d+)\s+(\d+)", clean)
+                        if batch_match:
+                            current_index = max(0, int(batch_match.group(1)) - 1)
+                            for previous in queue_snapshot[:current_index]:
+                                if previous.status == "Processing":
+                                    previous.status = "Queued"
+                            queue_snapshot[current_index].status = "Processing"
+                            self.events.put(("status", f"Processing {current_index + 1}/{total_files}: {queue_snapshot[current_index].path.name}"))
+                            self.events.put(("render", None))
+                            self.events.put(("render_status", None))
+                        match = PROGRESS_RE.search(clean)
+                        if match:
+                            current, total = map(int, match.groups())
+                            file_progress = min(current / max(total, 1), 1.0)
+                            overall = (current_index + file_progress) / total_files
+                            self.events.put(("progress", overall))
+                    return_code = self.process.wait()
+                    self.process = None
+                    if self.cancelled:
+                        for item in queue_snapshot:
+                            if item.status in {"Queued", "Processing"}:
+                                item.status = "Cancelled"
+                    elif return_code == 0:
+                        for item, output in batch_outputs:
+                            item.status = "Success"
+                            if ACCESS_FEATURE_ENABLED:
+                                self.events.put(("access_success", None))
+                            try:
+                                result_info = probe_video(output)
+                                elapsed = time.monotonic() - self.started_at
+                                size_mb = output.stat().st_size / 1024**2
+                                self.events.put((
+                                    "log",
+                                    f"Result: {output.name} | {result_info.width}x{result_info.height} | "
+                                    f"{result_info.fps:.3f} FPS | {result_info.duration:.2f}s | {size_mb:.1f} MB | "
+                                    f"elapsed {elapsed:.1f}s | {output}",
+                                ))
+                            except Exception as exc:
+                                item.status = "Failed"
+                                failures += 1
+                                self.events.put(("log", f"Result verification failed: {exc}"))
+                            self.events.put(("archive", item))
+                    else:
+                        failures = total_files
+                        for item in queue_snapshot:
                             item.status = "Failed"
-                            failures += 1
-                            self.events.put(("log", f"Result verification failed: {exc}"))
-                        self.events.put(("archive", item))
-                else:
-                    failures = total_files
-                    for item in queue_snapshot:
-                        item.status = "Failed"
-                        self.events.put(("archive", item))
-                self.events.put(("render", None))
-                self.events.put(("render_status", None))
-                return
+                            self.events.put(("archive", item))
+                    self.events.put(("render", None))
+                    self.events.put(("render_status", None))
+                    return
+                finally:
+                    if manifest:
+                        manifest.unlink(missing_ok=True)
             for index, item in enumerate(queue_snapshot):
                 if self.cancelled:
                     break

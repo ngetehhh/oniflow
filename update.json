@@ -1,6 +1,6 @@
 ﻿{
     "latest_version":  "0.9.4-beta",
     "download_url":  "https://github.com/ngetehhh/oniflow/releases/download/v0.9.4-beta/Oniflow-Setup-0.9.4-beta.exe",
-    "sha256":  "D733865DC8CDA6399EEDAB8C222663CA12F7E00B38D930D95410022983E11705",
+    "sha256":  "97A121AF22754AEBC8EEC74DDABA04C973AEF451282729DB1FA53CF263B758EA",
     "release_notes":  "Adds batch interpolation with one GMFSS model load for multi-video queues, keeps the best GMFSS baseline behavior, and improves window icon consistency."
 }
