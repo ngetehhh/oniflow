@@ -81,9 +81,40 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(args.motion_profile, "extreme")
         self.assertEqual(args.throttle_ms, 15)
 
+    def test_parser_accepts_batch_mode(self):
+        parser = MODULE.build_parser()
+        args = parser.parse_args(
+            [
+                "batch",
+                str(ROOT / "config.json"),
+                "--multiplier",
+                "8",
+                "--backend",
+                "GMFSS",
+                "--slow-motion-factor",
+                "8",
+                "--scale",
+                "0.75",
+            ]
+        )
+        self.assertEqual(args.command, "batch")
+        self.assertEqual(args.multiplier, 8)
+        self.assertEqual(args.backend, "GMFSS")
+        self.assertEqual(args.slow_motion_factor, 8)
+        self.assertEqual(args.scale, 0.75)
+
     def test_pipeline_forwards_throttle_to_gmfss(self):
         source = (ROOT / "anime_vfi.py").read_text(encoding="utf-8")
         self.assertGreaterEqual(source.count('command.extend(["--throttle-ms", str(throttle_ms)])'), 2)
+
+    def test_batch_mode_uses_one_engine_process(self):
+        source = (ROOT / "anime_vfi.py").read_text(encoding="utf-8")
+        engine = (ROOT / "work" / "GMFSS_Fortuna" / "inference_video.py").read_text(encoding="utf-8")
+        gui = (ROOT / "anime_vfi_gui.py").read_text(encoding="utf-8")
+        self.assertIn("def interpolate_gmfss_batch", source)
+        self.assertIn("--batch-manifest", source)
+        self.assertIn("VFI_BATCH_ITEM", engine)
+        self.assertIn('"batch", str(manifest)', gui)
 
     def test_atempo_filter_supports_ten_times_slow_motion(self):
         self.assertEqual(MODULE.atempo_filter(0.1), "atempo=0.5,atempo=0.5,atempo=0.5,atempo=0.8")

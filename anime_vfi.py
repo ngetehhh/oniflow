@@ -567,6 +567,118 @@ def interpolate_gmfss(
         temp_owner.cleanup()
 
 
+def remove_command_options(command: list[str], option_names: set[str]) -> list[str]:
+    result: list[str] = []
+    index = 0
+    while index < len(command):
+        argument = command[index]
+        if argument in option_names:
+            index += 2
+            continue
+        result.append(argument)
+        index += 1
+    return result
+
+
+def interpolate_gmfss_batch(
+    jobs: list[tuple[Path, Path, float]],
+    config: dict[str, Any],
+    backend: str,
+    mode: str,
+    scale: float,
+    scene_threshold: float | None,
+    static_threshold: float | None,
+    temp_root: Path | None,
+    keep_temp: bool,
+    slow_motion_factor: int,
+    uhd_mode: str,
+    throttle_ms: int,
+    motion_profile: str,
+) -> None:
+    if not jobs:
+        return
+    profile_name = f"{backend}_{'anime' if mode == 'anime' else 'live_action'}"
+    engine = config.get(profile_name) or config.get(backend, {})
+    template = engine.get("command")
+    if not isinstance(template, list) or not template:
+        raise PipelineError(
+            f"Isi {profile_name}.command di config.json dengan perintah implementasi {backend_label(backend)} Anda."
+        )
+    temp_owner = None
+    if temp_root:
+        temp_root.mkdir(parents=True, exist_ok=True)
+    if keep_temp:
+        batch_temp = Path(tempfile.mkdtemp(prefix="anime-vfi-batch-", dir=temp_root))
+    else:
+        temp_owner = tempfile.TemporaryDirectory(prefix="anime-vfi-batch-", dir=temp_root)
+        batch_temp = Path(temp_owner.name)
+    manifest_path = batch_temp / "gmfss-batch.json"
+    batch_items: list[dict[str, Any]] = []
+    prepared: list[tuple[Path, Path, Path, VideoInfo]] = []
+    try:
+        first_values: dict[str, str] | None = None
+        for index, (input_path, output_path, target_fps) in enumerate(jobs, start=1):
+            info = probe_video(input_path)
+            multiplier = round(target_fps / info.fps)
+            if multiplier < 2 or abs(info.fps * multiplier - target_fps) > 0.02:
+                raise PipelineError("GMFSS batch membutuhkan pengali FPS integer.")
+            resolved_scale = resolve_motion_scale(
+                info.width, info.height, scale, uhd_mode, multiplier, motion_profile
+            )
+            item_temp = batch_temp / f"item-{index:04d}"
+            item_temp.mkdir(parents=True, exist_ok=True)
+            silent_video = item_temp / f"gmfss_silent.{engine.get('output_extension', 'mp4')}"
+            values = {
+                "project_root": str(Path(__file__).resolve().parent),
+                "input": str(input_path.resolve()),
+                "output": str(silent_video.resolve()),
+                "target_fps": f"{target_fps:.6f}".rstrip("0").rstrip("."),
+                "multiplier": str(multiplier),
+                "scale": str(resolved_scale),
+                "temp_dir": str(item_temp.resolve()),
+            }
+            if first_values is None:
+                first_values = values
+            batch_items.append(
+                {
+                    "video": str(input_path.resolve()),
+                    "output": str(silent_video.resolve()),
+                    "fps": target_fps,
+                    "multi": multiplier,
+                    "scale": resolved_scale,
+                    "scene_threshold": scene_threshold if scene_threshold is not None else 0.32,
+                    "static_threshold": static_threshold if static_threshold is not None else 0.002,
+                    "throttle_ms": throttle_ms,
+                }
+            )
+            prepared.append((input_path, output_path, silent_video, info))
+        assert first_values is not None
+        cwd_value = engine.get("cwd")
+        cwd = Path(str(cwd_value).format(**first_values)).resolve() if cwd_value else None
+        command = render_template(template, first_values)
+        command = remove_command_options(command, {"--video", "--output", "--fps", "--multi", "--scale"})
+        command.extend(["--batch-manifest", str(manifest_path.resolve())])
+        validate_engine_command(command, cwd)
+        manifest_path.write_text(json.dumps(batch_items, indent=2), encoding="utf-8")
+        print("VFI_STAGE interpolate", flush=True)
+        run_command(command, cwd=cwd)
+        for input_path, output_path, silent_video, info in prepared:
+            if not silent_video.exists():
+                raise PipelineError(f"GMFSS tidak membuat output yang diharapkan: {silent_video}")
+            silent_info = probe_video(silent_video)
+            if (silent_info.width, silent_info.height) != (info.width, info.height):
+                raise PipelineError(
+                    "Engine menghasilkan resolusi yang berbeda dari input: "
+                    f"{silent_info.width}x{silent_info.height} != {info.width}x{info.height}"
+                )
+            mux_final(silent_video, input_path, output_path, config, slow_motion_factor, info)
+        if keep_temp:
+            print(f"File sementara batch dipertahankan: {batch_temp}")
+    finally:
+        if temp_owner:
+            temp_owner.cleanup()
+
+
 def doctor() -> None:
     checks = {
         "ffmpeg": shutil.which("ffmpeg"),
@@ -642,6 +754,41 @@ def build_parser() -> argparse.ArgumentParser:
         default="standard",
         help="Profil proteksi gerak. Extreme lebih agresif menurunkan motion scale untuk mengurangi ghosting.",
     )
+
+    batch_parser = sub.add_parser("batch", help="Jalankan beberapa interpolasi dalam satu proses engine.")
+    batch_parser.add_argument("manifest", type=existing_file, help="JSON list berisi input dan output.")
+    target_group = batch_parser.add_mutually_exclusive_group()
+    target_group.add_argument("--fps", type=float, help="FPS tujuan untuk semua video.")
+    target_group.add_argument("--multiplier", type=int, default=2, help="Pengali FPS. Nilai bawaan: 2.")
+    batch_parser.add_argument("--engine", choices=["gmfss", "preview"], default="gmfss")
+    batch_parser.add_argument("--backend", default="gmfss", help="Backend interpolasi yang tersedia di config.json.")
+    batch_parser.add_argument("--mode", choices=["anime", "live-action"], default="anime")
+    batch_parser.add_argument("--scale", type=float, choices=[0.5, 0.75, 1.0], default=1.0)
+    batch_parser.add_argument("--scene-threshold", type=float)
+    batch_parser.add_argument("--static-threshold", type=float)
+    batch_parser.add_argument("--temp-dir", type=Path)
+    batch_parser.add_argument("--throttle-ms", type=int, choices=range(0, 101), default=0)
+    batch_parser.add_argument("--config", type=Path, default=Path("config.json"))
+    batch_parser.add_argument("--keep-temp", action="store_true")
+    batch_parser.add_argument(
+        "--slow-motion-factor",
+        type=int,
+        choices=[1, 2, 4, 6, 8, 10],
+        default=1,
+        help="Perlambat video dengan membagi FPS hasil interpolasi. Nilai 1 menonaktifkan slow motion.",
+    )
+    batch_parser.add_argument(
+        "--uhd-mode",
+        choices=["auto", "full", "memory"],
+        default="auto",
+        help="Strategi VRAM untuk video resolusi tinggi.",
+    )
+    batch_parser.add_argument(
+        "--motion-profile",
+        choices=["standard", "extreme"],
+        default="standard",
+        help="Profil proteksi gerak. Extreme lebih agresif menurunkan motion scale untuk mengurangi ghosting.",
+    )
     return parser
 
 
@@ -675,6 +822,52 @@ def main() -> int:
                     args.input,
                     args.output,
                     target_fps,
+                    config,
+                    backend,
+                    args.mode,
+                    args.scale,
+                    args.scene_threshold,
+                    args.static_threshold,
+                    args.temp_dir,
+                    args.keep_temp,
+                    args.slow_motion_factor,
+                    args.uhd_mode,
+                    args.throttle_ms,
+                    args.motion_profile,
+                )
+        elif args.command == "batch":
+            root = Path(__file__).resolve().parent
+            access_ok, access_message = verify_runtime_access(root, require_manifest=(root / "integrity-manifest.json").is_file())
+            if not access_ok:
+                raise PipelineError(f"Oniflow security check failed: {access_message}")
+            raw_jobs = json.loads(args.manifest.read_text(encoding="utf-8-sig"))
+            if not isinstance(raw_jobs, list) or not raw_jobs:
+                raise PipelineError("Batch manifest harus berisi list job.")
+            jobs: list[tuple[Path, Path, float]] = []
+            for raw in raw_jobs:
+                if not isinstance(raw, dict):
+                    raise PipelineError("Setiap batch job harus berupa object.")
+                input_path = existing_file(str(raw["input"]))
+                output_path = Path(str(raw["output"]))
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                info = probe_video(input_path)
+                target_fps = args.fps if args.fps is not None else info.fps * args.multiplier
+                if target_fps <= info.fps:
+                    raise PipelineError("FPS tujuan harus lebih tinggi daripada FPS sumber.")
+                jobs.append((input_path, output_path, target_fps))
+            if args.engine == "preview":
+                for index, (input_path, output_path, target_fps) in enumerate(jobs, start=1):
+                    print(f"VFI_BATCH_ITEM {index} {len(jobs)}", flush=True)
+                    interpolate_preview(input_path, output_path, target_fps)
+            else:
+                config = load_config(args.config)
+                backend = str(args.backend).strip().lower()
+                backends = available_backends(config)
+                if backend not in backends:
+                    supported = ", ".join(backend_label(name) for name in backends)
+                    raise PipelineError(f"Backend '{args.backend}' tidak tersedia. Backend aktif: {supported}.")
+                interpolate_gmfss_batch(
+                    jobs,
                     config,
                     backend,
                     args.mode,

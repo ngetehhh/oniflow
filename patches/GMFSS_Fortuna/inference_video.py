@@ -2,6 +2,8 @@ import os
 import subprocess
 import time
 from pathlib import Path
+import json
+import copy
 import cv2
 import torch
 import argparse
@@ -88,6 +90,8 @@ def transferAudio(sourceVideo, targetVideo):
 parser = argparse.ArgumentParser(description='Interpolation for a pair of images')
 parser.add_argument('--video', dest='video', type=str, default=None)
 parser.add_argument('--output', dest='output', type=str, default=None)
+parser.add_argument('--batch-manifest', dest='batch_manifest', type=str, default=None,
+                    help='JSON manifest with video/output/fps/multi/scale jobs processed after one model load')
 parser.add_argument('--img', dest='img', type=str, default=None)
 parser.add_argument('--montage', dest='montage', action='store_true', help='montage origin video')
 parser.add_argument('--model', dest='modelDir', type=str, default='train_log', help='directory with trained model files')
@@ -123,7 +127,7 @@ parser.add_argument('--object-feather', dest='object_feather', type=int, default
 args = parser.parse_args()
 if args.exp != 1:
     args.multi = (2 ** args.exp)
-assert (not args.video is None or not args.img is None)
+assert (args.batch_manifest is not None or not args.video is None or not args.img is None)
 if args.skip:
     print("skip flag is abandoned, please refer to issue #207.")
 if args.UHD and args.scale==1.0:
@@ -163,47 +167,6 @@ model.load_model(args.modelDir, -1)
 print("Loaded model")
 model.eval()
 model.device()
-
-if not args.video is None:
-    videoCapture = cv2.VideoCapture(args.video)
-    fps = videoCapture.get(cv2.CAP_PROP_FPS)
-    tot_frame = videoCapture.get(cv2.CAP_PROP_FRAME_COUNT)
-    videoCapture.release()
-    if args.fps is None:
-        fpsNotAssigned = True
-        args.fps = fps * args.multi
-    else:
-        fpsNotAssigned = False
-    videogen = skvideo.io.vreader(args.video)
-    lastframe = next(videogen)
-    fourcc = cv2.VideoWriter_fourcc('m', 'p', '4', 'v')
-    video_path_wo_ext, ext = os.path.splitext(args.video)
-    print('{}.{}, {} frames in total, {}FPS to {}FPS'.format(video_path_wo_ext, args.ext, tot_frame, fps, args.fps))
-    if args.png == False and fpsNotAssigned == True:
-        print("The audio will be merged after interpolation process")
-    else:
-        print("Will not merge audio because using png or fps flag!")
-else:
-    videogen = []
-    for f in os.listdir(args.img):
-        if 'png' in f:
-            videogen.append(f)
-    tot_frame = len(videogen)
-    videogen.sort(key= lambda x:int(x[:-4]))
-    lastframe = cv2.imread(os.path.join(args.img, videogen[0]), cv2.IMREAD_UNCHANGED)[:, :, ::-1].copy()
-    videogen = videogen[1:]
-h, w, _ = lastframe.shape
-vid_out_name = None
-vid_out = None
-if args.png:
-    if not os.path.exists('vid_out'):
-        os.mkdir('vid_out')
-else:
-    if args.output is not None:
-        vid_out_name = args.output
-    else:
-        vid_out_name = '{}_{}X_{}fps.{}'.format(video_path_wo_ext, args.multi, int(np.round(args.fps)), args.ext)
-    vid_out = cv2.VideoWriter(vid_out_name, fourcc, args.fps, (w, h))
 
 def clear_write_buffer(user_args, write_buffer):
     cnt = 0
@@ -290,93 +253,164 @@ def pad_image(img):
     else:
         return F.pad(img, padding)
 
-if args.montage:
-    left = w // 4
-    w = w // 2
-scale_ratio = Fraction(str(args.scale))
-tmp = max(64, 64 * scale_ratio.denominator // gcd(scale_ratio.numerator, 64 * scale_ratio.denominator))
-ph = ((h - 1) // tmp + 1) * tmp
-pw = ((w - 1) // tmp + 1) * tmp
-padding = (0, pw - w, 0, ph - h)
-pbar = tqdm(total=tot_frame)
-processed_frames = 0
-if args.montage:
-    lastframe = lastframe[:, left: left + w]
-write_buffer = Queue(maxsize=500)
-read_buffer = Queue(maxsize=500)
-_thread.start_new_thread(build_read_buffer, (args, read_buffer, videogen))
-_thread.start_new_thread(clear_write_buffer, (args, write_buffer))
-
-I1 = torch.from_numpy(np.transpose(lastframe, (2,0,1))).to(device, non_blocking=True).unsqueeze(0)
-I1 = I1.half() if args.fp16 else I1.float()
-I1 = I1 / 255.
-I1 = F.interpolate(I1, (ph, pw), mode='bilinear', align_corners=False)
-temp = None # save lastframe when processing static frame
-
-while True:
-    if temp is not None:
-        frame = temp
-        temp = None
+def process_video(user_args):
+    global args, h, w, padding, left, vid_out
+    args = user_args
+    if not args.video is None:
+        videoCapture = cv2.VideoCapture(args.video)
+        fps = videoCapture.get(cv2.CAP_PROP_FPS)
+        tot_frame = videoCapture.get(cv2.CAP_PROP_FRAME_COUNT)
+        videoCapture.release()
+        if args.fps is None:
+            fpsNotAssigned = True
+            args.fps = fps * args.multi
+        else:
+            fpsNotAssigned = False
+        videogen = skvideo.io.vreader(args.video)
+        lastframe = next(videogen)
+        fourcc = cv2.VideoWriter_fourcc('m', 'p', '4', 'v')
+        video_path_wo_ext, ext = os.path.splitext(args.video)
+        print('{}.{}, {} frames in total, {}FPS to {}FPS'.format(video_path_wo_ext, args.ext, tot_frame, fps, args.fps))
+        if args.png == False and fpsNotAssigned == True:
+            print("The audio will be merged after interpolation process")
+        else:
+            print("Will not merge audio because using png or fps flag!")
     else:
-        frame = read_buffer.get()
-    if frame is None:
-        break
-    I0 = I1
-    I1 = torch.from_numpy(np.transpose(frame, (2,0,1))).to(device, non_blocking=True).unsqueeze(0)
+        videogen = []
+        for f in os.listdir(args.img):
+            if 'png' in f:
+                videogen.append(f)
+        tot_frame = len(videogen)
+        videogen.sort(key= lambda x:int(x[:-4]))
+        lastframe = cv2.imread(os.path.join(args.img, videogen[0]), cv2.IMREAD_UNCHANGED)[:, :, ::-1].copy()
+        videogen = videogen[1:]
+        fpsNotAssigned = False
+        fourcc = cv2.VideoWriter_fourcc('m', 'p', '4', 'v')
+        video_path_wo_ext = args.img
+
+    h, w, _ = lastframe.shape
+    vid_out_name = None
+    vid_out = None
+    if args.png:
+        if not os.path.exists('vid_out'):
+            os.mkdir('vid_out')
+    else:
+        if args.output is not None:
+            vid_out_name = args.output
+        else:
+            vid_out_name = '{}_{}X_{}fps.{}'.format(video_path_wo_ext, args.multi, int(np.round(args.fps)), args.ext)
+        vid_out = cv2.VideoWriter(vid_out_name, fourcc, args.fps, (w, h))
+
+    if args.montage:
+        left = w // 4
+        w = w // 2
+    scale_ratio = Fraction(str(args.scale))
+    tmp = max(64, 64 * scale_ratio.denominator // gcd(scale_ratio.numerator, 64 * scale_ratio.denominator))
+    ph = ((h - 1) // tmp + 1) * tmp
+    pw = ((w - 1) // tmp + 1) * tmp
+    padding = (0, pw - w, 0, ph - h)
+    pbar = tqdm(total=tot_frame)
+    processed_frames = 0
+    if args.montage:
+        lastframe = lastframe[:, left: left + w]
+    write_buffer = Queue(maxsize=500)
+    read_buffer = Queue(maxsize=500)
+    _thread.start_new_thread(build_read_buffer, (args, read_buffer, videogen))
+    _thread.start_new_thread(clear_write_buffer, (args, write_buffer))
+
+    I1 = torch.from_numpy(np.transpose(lastframe, (2,0,1))).to(device, non_blocking=True).unsqueeze(0)
     I1 = I1.half() if args.fp16 else I1.float()
     I1 = I1 / 255.
     I1 = F.interpolate(I1, (ph, pw), mode='bilinear', align_corners=False)
-    
-    frame_difference = float(np.mean(np.abs(lastframe.astype(np.float32) - frame.astype(np.float32))) / 255.0)
-    protection_mask = None
-    if frame_difference <= args.static_threshold or frame_difference >= args.scene_threshold:
-        output = [I0] * (args.multi - 1)
-    else:
-        protection_mask = build_object_protection_mask(lastframe, frame, args)
-        amp_context = torch.autocast(device_type="cuda", dtype=torch.float16) if args.amp and torch.cuda.is_available() else nullcontext()
-        with amp_context:
-            reuse_things = model.reuse(I0, I1, args.scale)
-            output = make_inference(I0, I1, reuse_things, args.multi-1)
+    temp = None
+
+    while True:
+        if temp is not None:
+            frame = temp
+            temp = None
+        else:
+            frame = read_buffer.get()
+        if frame is None:
+            break
+        I0 = I1
+        I1 = torch.from_numpy(np.transpose(frame, (2,0,1))).to(device, non_blocking=True).unsqueeze(0)
+        I1 = I1.half() if args.fp16 else I1.float()
+        I1 = I1 / 255.
+        I1 = F.interpolate(I1, (ph, pw), mode='bilinear', align_corners=False)
+
+        frame_difference = float(np.mean(np.abs(lastframe.astype(np.float32) - frame.astype(np.float32))) / 255.0)
+        protection_mask = None
+        if frame_difference <= args.static_threshold or frame_difference >= args.scene_threshold:
+            output = [I0] * (args.multi - 1)
+        else:
+            protection_mask = build_object_protection_mask(lastframe, frame, args)
+            amp_context = torch.autocast(device_type="cuda", dtype=torch.float16) if args.amp and torch.cuda.is_available() else nullcontext()
+            with amp_context:
+                reuse_things = model.reuse(I0, I1, args.scale)
+                output = make_inference(I0, I1, reuse_things, args.multi-1)
+
+        if args.montage:
+            write_buffer.put(np.concatenate((lastframe, lastframe), 1))
+            for index, mid in enumerate(output, start=1):
+                mid = (((mid[0] * 255.).byte().cpu().numpy().transpose(1, 2, 0)))
+                mid = protect_interpolated_object(mid[:h, :w], lastframe, frame, protection_mask, index, args.multi)
+                write_buffer.put(np.concatenate((lastframe, mid[:h, :w]), 1))
+        else:
+            write_buffer.put(lastframe)
+            for index, mid in enumerate(output, start=1):
+                mid = F.interpolate(mid, (h, w), mode='bilinear', align_corners=False)
+                mid = (((mid[0] * 255.).byte().cpu().numpy().transpose(1, 2, 0)))
+                mid = protect_interpolated_object(mid, lastframe, frame, protection_mask, index, args.multi)
+                write_buffer.put(mid)
+        pbar.update(1)
+        processed_frames += 1
+        print('VFI_PROGRESS {} {}'.format(processed_frames, max(int(tot_frame) - 1, 1)), flush=True)
+        if args.throttle_ms > 0:
+            time.sleep(args.throttle_ms / 1000.0)
+        lastframe = frame
 
     if args.montage:
         write_buffer.put(np.concatenate((lastframe, lastframe), 1))
-        for index, mid in enumerate(output, start=1):
-            mid = (((mid[0] * 255.).byte().cpu().numpy().transpose(1, 2, 0)))
-            mid = protect_interpolated_object(mid[:h, :w], lastframe, frame, protection_mask, index, args.multi)
-            write_buffer.put(np.concatenate((lastframe, mid[:h, :w]), 1))
     else:
         write_buffer.put(lastframe)
-        for index, mid in enumerate(output, start=1):
-            mid = F.interpolate(mid, (h, w), mode='bilinear', align_corners=False)
-            mid = (((mid[0] * 255.).byte().cpu().numpy().transpose(1, 2, 0)))
-            mid = protect_interpolated_object(mid, lastframe, frame, protection_mask, index, args.multi)
-            write_buffer.put(mid)
-    pbar.update(1)
-    processed_frames += 1
-    print('VFI_PROGRESS {} {}'.format(processed_frames, max(int(tot_frame) - 1, 1)), flush=True)
-    if args.throttle_ms > 0:
-        time.sleep(args.throttle_ms / 1000.0)
-    lastframe = frame
+        for _ in range(args.multi - 1):
+            write_buffer.put(lastframe)
+    while(not write_buffer.empty()):
+        time.sleep(0.1)
+    pbar.close()
+    if not vid_out is None:
+        vid_out.release()
 
-if args.montage:
-    write_buffer.put(np.concatenate((lastframe, lastframe), 1))
+    if args.png == False and fpsNotAssigned == True and not args.video is None:
+        try:
+            transferAudio(args.video, vid_out_name)
+        except:
+            print("Audio transfer failed. Interpolated video will have no audio")
+            targetNoAudio = os.path.splitext(vid_out_name)[0] + "_noaudio" + os.path.splitext(vid_out_name)[1]
+            os.rename(targetNoAudio, vid_out_name)
+
+def build_job_args(base_args, job):
+    job_args = copy.copy(base_args)
+    for key, value in job.items():
+        if not hasattr(job_args, key):
+            raise ValueError('Unknown batch job option: {}'.format(key))
+        setattr(job_args, key, value)
+    if job_args.exp != 1:
+        job_args.multi = (2 ** job_args.exp)
+    if job_args.UHD and job_args.scale == 1.0:
+        job_args.scale = 0.5
+    assert job_args.scale in [0.25, 0.5, 0.75, 1.0, 2.0, 4.0]
+    if not job_args.img is None:
+        job_args.png = True
+    return job_args
+
+if args.batch_manifest:
+    with open(args.batch_manifest, 'r', encoding='utf-8') as handle:
+        jobs = json.load(handle)
+    if not isinstance(jobs, list) or not jobs:
+        raise ValueError('Batch manifest must contain a non-empty list of jobs')
+    for index, job in enumerate(jobs, start=1):
+        print('VFI_BATCH_ITEM {} {}'.format(index, len(jobs)), flush=True)
+        process_video(build_job_args(args, job))
 else:
-    write_buffer.put(lastframe)
-    # Preserve the source duration at high multipliers. There is no following
-    # frame to interpolate against, so hold the final source frame.
-    for _ in range(args.multi - 1):
-        write_buffer.put(lastframe)
-while(not write_buffer.empty()):
-    time.sleep(0.1)
-pbar.close()
-if not vid_out is None:
-    vid_out.release()
-
-# move audio to new video file if appropriate
-if args.png == False and fpsNotAssigned == True and not args.video is None:
-    try:
-        transferAudio(args.video, vid_out_name)
-    except:
-        print("Audio transfer failed. Interpolated video will have no audio")
-        targetNoAudio = os.path.splitext(vid_out_name)[0] + "_noaudio" + os.path.splitext(vid_out_name)[1]
-        os.rename(targetNoAudio, vid_out_name)
+    process_video(args)
