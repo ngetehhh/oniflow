@@ -1,6 +1,6 @@
 {
-  "latest_version": "0.9.4-beta",
-  "download_url": "https://github.com/OWNER/REPO/releases/download/v0.9.4-beta/Oniflow-Setup-0.9.4-beta.exe",
+  "latest_version": "0.9.5-beta",
+  "download_url": "https://github.com/OWNER/REPO/releases/download/v0.9.5-beta/Oniflow-Setup-0.9.5-beta.exe",
   "sha256": "PASTE_INSTALLER_SHA256_HERE",
   "release_notes": "Short release notes shown inside Oniflow."
 }

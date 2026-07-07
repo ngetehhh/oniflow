@@ -65,6 +65,9 @@ DEFAULT_SETTINGS = {
     "notify_complete": True,
     "confirm_exit": True,
     "save_logs": True,
+    "auto_check_updates": True,
+    "update_check_interval_hours": 24,
+    "last_update_check": "",
     "gpu_usage_limit": "100%",
     "default_profile": "Anime",
     "default_backend": "GMFSS",
@@ -73,7 +76,7 @@ DEFAULT_SETTINGS = {
     "default_output_format": "MP4",
     "default_slow_motion": "Off",
 }
-APP_VERSION = "0.9.4-beta"
+APP_VERSION = "0.9.5-beta"
 ACCESS_FEATURE_ENABLED = False
 OFFLINE_LICENSE_REQUIRED = True
 FREE_DAILY_CLIP_LIMIT = 15
@@ -89,6 +92,18 @@ def version_key(value: str) -> tuple[int, ...]:
 
 def update_is_newer(latest: str, current: str = APP_VERSION) -> bool:
     return version_key(latest) > version_key(current)
+
+
+def parse_iso_datetime(value: object) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
 
 
 def load_update_config(path: Path = UPDATE_CONFIG_PATH) -> dict[str, str]:
@@ -278,6 +293,7 @@ class AnimeVfiPro:
         self.model_name.trace_add("write", self._mode_changed)
         self.root.after(100, self._poll_events)
         self.root.after(1000, self._start_gpu_update)
+        self.root.after(6000, self._maybe_auto_check_for_updates)
         self.root.protocol("WM_DELETE_WINDOW", self._close)
 
     def _ensure_offline_license(self) -> None:
@@ -981,6 +997,7 @@ class AnimeVfiPro:
         toggle("Application", "notify_complete", "Show completion notification")
         toggle("Application", "confirm_exit", "Confirm before closing during processing")
         toggle("Application", "save_logs", "Save process logs")
+        toggle("Application", "auto_check_updates", "Check for updates automatically")
         creator_card = ctk.CTkFrame(
             tab_content["Application"], fg_color="#111a2e", border_width=1, border_color="#263552"
         )
@@ -1960,28 +1977,45 @@ class AnimeVfiPro:
         path.write_text(json.dumps(config, indent=2), encoding="utf-8")
         return path
 
-    def check_for_updates(self, parent: ctk.CTkToplevel | None = None) -> None:
-        self._log("Checking for updates...")
-        threading.Thread(target=self._check_for_updates_worker, args=(parent,), daemon=True).start()
+    def _maybe_auto_check_for_updates(self) -> None:
+        if not self.settings.get("auto_check_updates", True):
+            return
+        last_check = parse_iso_datetime(self.settings.get("last_update_check"))
+        interval_hours = max(1, int(self.settings.get("update_check_interval_hours", 24)))
+        now = datetime.now(timezone.utc)
+        if last_check and now - last_check < timedelta(hours=interval_hours):
+            return
+        self.check_for_updates(automatic=True)
 
-    def _check_for_updates_worker(self, parent: ctk.CTkToplevel | None) -> None:
+    def _record_update_check(self) -> None:
+        self.settings["last_update_check"] = datetime.now(timezone.utc).isoformat()
+        self._save_settings_file(self.settings)
+
+    def check_for_updates(self, parent: ctk.CTkToplevel | None = None, automatic: bool = False) -> None:
+        self._log("Checking for updates..." if not automatic else "Checking for updates automatically...")
+        threading.Thread(target=self._check_for_updates_worker, args=(parent, automatic), daemon=True).start()
+
+    def _check_for_updates_worker(self, parent: ctk.CTkToplevel | None, automatic: bool = False) -> None:
         try:
             config = load_update_config()
             manifest_url = config["manifest_url"]
             if not manifest_url:
                 raise RuntimeError("Update manifest URL is not configured.")
             update = fetch_update_manifest(manifest_url)
+            self._record_update_check()
             if not update_is_newer(update["latest_version"]):
-                self.root.after(0, lambda: messagebox.showinfo(
-                    "Oniflow Update", f"Oniflow {APP_VERSION} is already up to date.", parent=parent
-                ))
+                if not automatic:
+                    self.root.after(0, lambda: messagebox.showinfo(
+                        "Oniflow Update", f"Oniflow {APP_VERSION} is already up to date.", parent=parent
+                    ))
                 self.events.put(("log", "No update available."))
                 return
             self.root.after(0, lambda: self._confirm_update(update, parent))
         except Exception as exc:
             message = str(exc)
             self.events.put(("log", f"Update check failed: {message}"))
-            self.root.after(0, lambda: messagebox.showerror("Oniflow Update", message, parent=parent))
+            if not automatic:
+                self.root.after(0, lambda: messagebox.showerror("Oniflow Update", message, parent=parent))
 
     def _confirm_update(self, update: dict[str, str], parent: ctk.CTkToplevel | None) -> None:
         notes = update.get("release_notes") or "No release notes were provided."

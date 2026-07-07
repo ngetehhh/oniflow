@@ -59,6 +59,8 @@ class ProductTests(unittest.TestCase):
         self.assertEqual(settings["default_interpolation_quality"], "Normal")
         self.assertEqual(settings["default_output_format"], "MP4")
         self.assertEqual(settings["default_slow_motion"], "Off")
+        self.assertTrue(settings["auto_check_updates"])
+        self.assertEqual(settings["update_check_interval_hours"], 24)
 
     def test_update_manifest_helpers(self):
         self.assertTrue(anime_vfi_gui.update_is_newer("0.9.3-beta", "0.9.2-beta"))
@@ -66,6 +68,10 @@ class ProductTests(unittest.TestCase):
         self.assertEqual(anime_vfi_gui.version_key("v1.2.3-beta"), (1, 2, 3))
         source = inspect.getsource(anime_vfi_gui.AnimeVfiPro.check_for_updates)
         self.assertIn("_check_for_updates_worker", source)
+        gui = (ROOT / "anime_vfi_gui.py").read_text(encoding="utf-8")
+        self.assertIn("_maybe_auto_check_for_updates", gui)
+        self.assertIn('"Check for updates automatically"', gui)
+        self.assertIn("automatic: bool = False", gui)
 
     def test_job_defaults_are_available_and_applied(self):
         source = (ROOT / "anime_vfi_gui.py").read_text(encoding="utf-8")
