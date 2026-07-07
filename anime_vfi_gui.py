@@ -141,18 +141,26 @@ def friendly_update_error(exc: Exception) -> str:
     return str(exc)
 
 
-def download_update_installer(update: dict[str, str], output_dir: Path) -> Path:
+def download_update_installer(update: dict[str, str], output_dir: Path, progress_callback=None) -> Path:
     output_dir.mkdir(parents=True, exist_ok=True)
     filename = Path(urllib.parse.urlparse(update["download_url"]).path).name or "Oniflow-Update.exe"
     target = output_dir / filename
     digest = hashlib.sha256()
     with urllib.request.urlopen(update["download_url"], timeout=30) as response, target.open("wb") as handle:
+        total = int(response.headers.get("Content-Length") or 0)
+        downloaded = 0
+        last_report = 0.0
         while True:
             chunk = response.read(1024 * 1024)
             if not chunk:
                 break
             digest.update(chunk)
             handle.write(chunk)
+            downloaded += len(chunk)
+            now = time.monotonic()
+            if progress_callback and (now - last_report >= 0.5 or (total and downloaded >= total)):
+                progress_callback(downloaded, total)
+                last_report = now
     actual = digest.hexdigest().upper()
     expected = update["sha256"].upper()
     if actual != expected:
@@ -2047,11 +2055,16 @@ class AnimeVfiPro:
 
     def _download_update_worker(self, update: dict[str, str], parent: ctk.CTkToplevel | None) -> None:
         try:
-            target = download_update_installer(update, APP_DATA_ROOT / "updates")
+            target = download_update_installer(
+                update,
+                APP_DATA_ROOT / "updates",
+                lambda downloaded, total: self.events.put(("update_progress", (downloaded, total))),
+            )
             self.root.after(0, lambda: self._launch_update_installer(target, parent))
         except Exception as exc:
             message = str(exc)
             self.events.put(("log", f"Update download failed: {message}"))
+            self.events.put(("status", "Update download failed"))
             self.root.after(0, lambda: messagebox.showerror("Oniflow Update", message, parent=parent))
 
     def _launch_update_installer(self, installer: Path, parent: ctk.CTkToplevel | None) -> None:
@@ -2216,6 +2229,19 @@ class AnimeVfiPro:
                 elapsed = time.monotonic() - self.started_at
                 remaining = elapsed * (1 - value) / value if value > 0 else 0
                 self.eta_text.set(f"ETA {int(remaining // 60):02d}:{int(remaining % 60):02d}")
+            elif kind == "update_progress":
+                downloaded, total = payload
+                downloaded_mb = int(downloaded) / (1024 * 1024)
+                if total:
+                    total_mb = int(total) / (1024 * 1024)
+                    value = min(max(int(downloaded) / int(total), 0.0), 1.0)
+                    self.progress.set(value)
+                    self.progress_text.set(f"{value * 100:.1f}%")
+                    self.status.set(f"Downloading update {downloaded_mb:.0f}/{total_mb:.0f} MB")
+                else:
+                    self.status.set(f"Downloading update {downloaded_mb:.0f} MB")
+                    self.progress_text.set("Downloading")
+                self.eta_text.set("ETA --:--")
             elif kind == "done":
                 self.start_button.configure(state="normal")
                 self.cancel_button.configure(state="disabled")

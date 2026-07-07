@@ -74,6 +74,8 @@ class ProductTests(unittest.TestCase):
         self.assertIn("automatic: bool = False", gui)
         self.assertIn("UPDATE_REQUEST_HEADERS", gui)
         self.assertIn("friendly_update_error", gui)
+        self.assertIn("progress_callback", gui)
+        self.assertIn('"update_progress"', gui)
 
     def test_job_defaults_are_available_and_applied(self):
         source = (ROOT / "anime_vfi_gui.py").read_text(encoding="utf-8")
