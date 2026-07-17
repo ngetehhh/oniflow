@@ -64,9 +64,13 @@ class ProductTests(unittest.TestCase):
 
     def test_mov_with_alpha_output_is_available(self):
         gui = (ROOT / "anime_vfi_gui.py").read_text(encoding="utf-8")
+        self.assertIn('"MOV"', gui)
         self.assertIn('"MOV with Alpha"', gui)
+        self.assertEqual(anime_vfi_gui.output_extension("MOV"), "mov")
         self.assertEqual(anime_vfi_gui.output_extension("MOV with Alpha"), "mov")
         self.assertIn('"codec": "prores_ks"', gui)
+        self.assertIn('"profile": "3"', gui)
+        self.assertIn('"pixel_format": "yuv422p10le"', gui)
         self.assertIn('"profile": "4444"', gui)
         self.assertIn('"pixel_format": "yuva444p10le"', gui)
 

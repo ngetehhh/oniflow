@@ -46,7 +46,7 @@ LEGACY_SETTINGS_PATH = ROOT / "user_settings.json"
 BASE_CONFIG_PATH = ROOT / "config.json"
 VIDEO_EXTENSIONS = {".avi", ".m2ts", ".m4v", ".mkv", ".mov", ".mp4", ".ts", ".webm"}
 PROGRESS_RE = re.compile(r"VFI_PROGRESS\s+(\d+)\s+(\d+)")
-OUTPUT_FORMATS = ["MP4", "MKV", "MOV with Alpha"]
+OUTPUT_FORMATS = ["MP4", "MKV", "MOV", "MOV with Alpha"]
 DEFAULT_SETTINGS = {
     "video_codec": "AV1",
     "quality_value": "Balanced (CQ 18)",
@@ -238,7 +238,7 @@ def format_output_fps(fps: float) -> str:
 
 
 def output_extension(output_format: str) -> str:
-    if output_format == "MOV with Alpha":
+    if output_format in {"MOV", "MOV with Alpha"}:
         return "mov"
     return output_format.lower()
 
@@ -901,7 +901,7 @@ class AnimeVfiPro:
             "How output settings work",
             "Output Format selects the file container. Video Codec controls compatibility and compression. "
             "Encoding Quality controls output detail and file size. It does not change AI interpolation accuracy. "
-            "MOV with Alpha exports ProRes 4444 for compositing workflows.",
+            "MOV exports ProRes 422 HQ for editing workflows. MOV with Alpha exports ProRes 4444 for compositing workflows.",
         )
         guide(
             "Video Output",
@@ -1994,6 +1994,13 @@ class AnimeVfiPro:
                 "codec": "prores_ks",
                 "profile": "4444",
                 "pixel_format": "yuva444p10le",
+                "bits_per_mb": 8000,
+            }
+        elif output_format_value == "MOV":
+            config["encoder"] = {
+                "codec": "prores_ks",
+                "profile": "3",
+                "pixel_format": "yuv422p10le",
                 "bits_per_mb": 8000,
             }
         else:
