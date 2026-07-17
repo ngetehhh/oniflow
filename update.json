@@ -1,6 +1,6 @@
 {
-    "latest_version":  "0.9.5-beta",
-    "download_url":  "https://github.com/ngetehhh/oniflow/releases/download/v0.9.5-beta/Oniflow-Setup-0.9.5-beta.exe",
-    "sha256":  "10586C03E2E02C5D0738BB5CB5271B84AACAE77168E725C034C6B6A6FB004742",
-    "release_notes":  "Adds automatic update checks, keeps the batch queue crash fix, preserves the single-process GMFSS batch interpolation path, and hardens update checks against GitHub rate limits."
+    "latest_version":  "0.9.6-beta",
+    "download_url":  "https://github.com/ngetehhh/oniflow/releases/download/v0.9.6-beta/Oniflow-Setup-0.9.6-beta.exe",
+    "sha256":  "922F5F40C755A28F82780882C5A660DD57A536E204F97DBEDC8803566371F873",
+    "release_notes":  "Adds MOV, MOV with Alpha, and visible update download progress while keeping prior interpolation and updater fixes."
 }
