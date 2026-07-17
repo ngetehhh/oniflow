@@ -46,6 +46,7 @@ LEGACY_SETTINGS_PATH = ROOT / "user_settings.json"
 BASE_CONFIG_PATH = ROOT / "config.json"
 VIDEO_EXTENSIONS = {".avi", ".m2ts", ".m4v", ".mkv", ".mov", ".mp4", ".ts", ".webm"}
 PROGRESS_RE = re.compile(r"VFI_PROGRESS\s+(\d+)\s+(\d+)")
+OUTPUT_FORMATS = ["MP4", "MKV", "MOV with Alpha"]
 DEFAULT_SETTINGS = {
     "video_codec": "AV1",
     "quality_value": "Balanced (CQ 18)",
@@ -234,6 +235,12 @@ def format_output_fps(fps: float) -> str:
     if abs(fps - rounded) < 0.001:
         return str(rounded)
     return f"{fps:.3f}".rstrip("0").rstrip(".")
+
+
+def output_extension(output_format: str) -> str:
+    if output_format == "MOV with Alpha":
+        return "mov"
+    return output_format.lower()
 
 
 def build_output_filename(
@@ -725,7 +732,7 @@ class AnimeVfiPro:
 
         format_field = ctk.CTkFrame(output_grid, fg_color="transparent")
         format_field.grid(row=0, column=0, sticky="ew")
-        self._field(format_field, "Output Format", variable=self.output_format, options=["MP4", "MKV"], compact=True)
+        self._field(format_field, "Output Format", variable=self.output_format, options=OUTPUT_FORMATS, compact=True)
 
         playback_field = ctk.CTkFrame(output_grid, fg_color="transparent")
         playback_field.grid(row=0, column=1, sticky="ew")
@@ -863,7 +870,7 @@ class AnimeVfiPro:
             "Default Interpolation Quality",
             ["Fast", "Normal", "Quality"],
         )
-        option("Job Defaults", "default_output_format", "Default Output Format", ["MP4", "MKV"])
+        option("Job Defaults", "default_output_format", "Default Output Format", OUTPUT_FORMATS)
         option(
             "Job Defaults",
             "default_slow_motion",
@@ -893,7 +900,8 @@ class AnimeVfiPro:
             "Video Output",
             "How output settings work",
             "Output Format selects the file container. Video Codec controls compatibility and compression. "
-            "Encoding Quality controls output detail and file size. It does not change AI interpolation accuracy.",
+            "Encoding Quality controls output detail and file size. It does not change AI interpolation accuracy. "
+            "MOV with Alpha exports ProRes 4444 for compositing workflows.",
         )
         guide(
             "Video Output",
@@ -1718,7 +1726,7 @@ class AnimeVfiPro:
                 self.available_backend_ids[0],
             ),
             "mode": "anime" if self.mode.get() == "Anime" else "live-action",
-            "extension": self.output_format.get().lower(),
+            "extension": output_extension(self.output_format.get()),
             "multiplier": self.multiplier.get().removesuffix("x"),
             "slow_motion_factor": (
                 self.slow_motion.get().removesuffix("x") if self.slow_motion.get() != "Off" else "1"
@@ -1978,15 +1986,26 @@ class AnimeVfiPro:
                     ]
         codecs = {"AV1": "av1_nvenc", "HEVC": "hevc_nvenc", "H.264": "h264_nvenc"}
         quality_values = {"High Quality (CQ 14)": 14, "Balanced (CQ 18)": 18, "Small File (CQ 23)": 23}
-        selected_codec = str(self.settings["video_codec"])
-        supported = self.device_caps.get("encoders", [])
-        if supported and selected_codec not in supported:
-            fallback = "H.264" if "H.264" in supported else str(supported[0])
-            self._log(f"{selected_codec} is unsupported on this GPU. Using {fallback}.")
-            selected_codec = fallback
-        config["encoder"]["codec"] = codecs[selected_codec]
-        config["encoder"]["cq"] = quality_values[str(self.settings["quality_value"])]
-        config["encoder"]["pixel_format"] = "p010le" if self.settings["bit_depth"] == "10-bit" else "yuv420p"
+        output_format_value = (
+            self.output_format.get() if hasattr(self, "output_format") else str(self.settings["default_output_format"])
+        )
+        if output_format_value == "MOV with Alpha":
+            config["encoder"] = {
+                "codec": "prores_ks",
+                "profile": "4444",
+                "pixel_format": "yuva444p10le",
+                "bits_per_mb": 8000,
+            }
+        else:
+            selected_codec = str(self.settings["video_codec"])
+            supported = self.device_caps.get("encoders", [])
+            if supported and selected_codec not in supported:
+                fallback = "H.264" if "H.264" in supported else str(supported[0])
+                self._log(f"{selected_codec} is unsupported on this GPU. Using {fallback}.")
+                selected_codec = fallback
+            config["encoder"]["codec"] = codecs[selected_codec]
+            config["encoder"]["cq"] = quality_values[str(self.settings["quality_value"])]
+            config["encoder"]["pixel_format"] = "p010le" if self.settings["bit_depth"] == "10-bit" else "yuv420p"
         config["audio"] = {
             "mp4_fallback_codec": "aac",
             "copy_for_mkv": True,

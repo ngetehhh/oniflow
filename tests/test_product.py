@@ -62,6 +62,14 @@ class ProductTests(unittest.TestCase):
         self.assertTrue(settings["auto_check_updates"])
         self.assertEqual(settings["update_check_interval_hours"], 24)
 
+    def test_mov_with_alpha_output_is_available(self):
+        gui = (ROOT / "anime_vfi_gui.py").read_text(encoding="utf-8")
+        self.assertIn('"MOV with Alpha"', gui)
+        self.assertEqual(anime_vfi_gui.output_extension("MOV with Alpha"), "mov")
+        self.assertIn('"codec": "prores_ks"', gui)
+        self.assertIn('"profile": "4444"', gui)
+        self.assertIn('"pixel_format": "yuva444p10le"', gui)
+
     def test_update_manifest_helpers(self):
         self.assertTrue(anime_vfi_gui.update_is_newer("0.9.3-beta", "0.9.2-beta"))
         self.assertFalse(anime_vfi_gui.update_is_newer("0.9.2-beta", "0.9.2-beta"))
