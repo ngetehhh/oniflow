@@ -1,6 +1,11 @@
 {
-  "latest_version": "0.9.8-beta",
-  "download_url": "https://github.com/OWNER/REPO/releases/download/v0.9.8-beta/Oniflow-Setup-0.9.8-beta.exe",
+  "latest_version": "0.9.9-beta",
+  "download_url": "https://github.com/OWNER/REPO/releases/download/v0.9.9-beta/Oniflow-Setup-0.9.9-beta.exe",
   "sha256": "PASTE_INSTALLER_SHA256_HERE",
-  "release_notes": "Short release notes shown inside Oniflow."
+  "release_notes": "Short release notes shown inside Oniflow.",
+  "patch": {
+    "from_version": "0.9.8-beta",
+    "download_url": "https://github.com/OWNER/REPO/releases/download/v0.9.9-beta/Oniflow-Patch-0.9.8-beta-to-0.9.9-beta.zip",
+    "sha256": "PASTE_PATCH_SHA256_HERE"
+  }
 }

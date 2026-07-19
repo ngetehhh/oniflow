@@ -20,6 +20,7 @@ import urllib.parse
 import urllib.request
 import uuid
 import webbrowser
+import zipfile
 from datetime import date, datetime, timedelta, timezone
 from dataclasses import dataclass
 from pathlib import Path
@@ -46,6 +47,7 @@ LEGACY_SETTINGS_PATH = ROOT / "user_settings.json"
 BASE_CONFIG_PATH = ROOT / "config.json"
 VIDEO_EXTENSIONS = {".avi", ".m2ts", ".m4v", ".mkv", ".mov", ".mp4", ".ts", ".webm"}
 PROGRESS_RE = re.compile(r"VFI_PROGRESS\s+(\d+)\s+(\d+)")
+PATCH_ASSET_RE = re.compile(r"^Oniflow-Patch-(?P<from>.+)-to-(?P<to>.+)\.zip$", re.IGNORECASE)
 OUTPUT_FORMATS = ["MP4", "MKV", "MOV", "MOV with Alpha"]
 DEFAULT_SETTINGS = {
     "video_codec": "AV1",
@@ -77,7 +79,7 @@ DEFAULT_SETTINGS = {
     "default_output_format": "MP4",
     "default_slow_motion": "Off",
 }
-APP_VERSION = "0.9.8-beta"
+APP_VERSION = "0.9.9-beta"
 UPDATE_REQUEST_HEADERS = {
     "Accept": "application/json, text/plain, */*",
     "User-Agent": f"Oniflow/{APP_VERSION}",
@@ -126,12 +128,22 @@ def fetch_update_manifest(manifest_url: str, timeout: int = 12) -> dict[str, str
     request = urllib.request.Request(manifest_url, headers=UPDATE_REQUEST_HEADERS)
     with urllib.request.urlopen(request, timeout=timeout) as response:
         data = json.loads(response.read().decode("utf-8-sig"))
-    return {
+    update = {
         "latest_version": str(data["latest_version"]).strip(),
         "download_url": str(data["download_url"]).strip(),
         "sha256": str(data["sha256"]).strip().upper(),
         "release_notes": str(data.get("release_notes", "")).strip(),
     }
+    patch = data.get("patch") if isinstance(data.get("patch"), dict) else {}
+    if patch:
+        update.update({
+            "patch_from_version": str(patch.get("from_version", "")).strip(),
+            "patch_url": str(patch.get("download_url", "")).strip(),
+            "patch_sha256": str(patch.get("sha256", "")).strip().upper(),
+        })
+        if update["patch_from_version"] == APP_VERSION and update["patch_url"] and update["patch_sha256"]:
+            update["update_kind"] = "patch"
+    return update
 
 
 def fetch_github_release_update(release_api_url: str, channel: str = "beta", timeout: int = 12) -> dict[str, str]:
@@ -160,13 +172,35 @@ def fetch_github_release_update(release_api_url: str, channel: str = "beta", tim
         digest = str(installer.get("digest", "")).strip()
         if not digest.lower().startswith("sha256:"):
             continue
-        return {
+        update = {
             "latest_version": version,
             "download_url": str(installer["browser_download_url"]).strip(),
             "sha256": digest.split(":", 1)[1].strip().upper(),
             "release_notes": str(release.get("body", "")).strip(),
         }
+        patch = compatible_patch_asset(assets, APP_VERSION, version)
+        if patch:
+            patch_digest = str(patch.get("digest", "")).strip()
+            if patch_digest.lower().startswith("sha256:"):
+                update.update({
+                    "update_kind": "patch",
+                    "patch_from_version": APP_VERSION,
+                    "patch_url": str(patch["browser_download_url"]).strip(),
+                    "patch_sha256": patch_digest.split(":", 1)[1].strip().upper(),
+                })
+        return update
     raise RuntimeError("No compatible Oniflow update release was found.")
+
+
+def compatible_patch_asset(assets: list[dict[str, object]], current_version: str, latest_version: str) -> dict[str, object] | None:
+    for asset in assets:
+        name = str(asset.get("name", "")).strip()
+        match = PATCH_ASSET_RE.match(name)
+        if not match:
+            continue
+        if match.group("from").lower() == current_version.lower() and match.group("to").lower() == latest_version.lower():
+            return asset
+    return None
 
 
 def friendly_update_error(exc: Exception) -> str:
@@ -179,11 +213,29 @@ def friendly_update_error(exc: Exception) -> str:
 
 
 def download_update_installer(update: dict[str, str], output_dir: Path, progress_callback=None) -> Path:
+    return download_update_file(update["download_url"], update["sha256"], output_dir, "Oniflow-Update.exe", progress_callback)
+
+
+def download_update_patch(update: dict[str, str], output_dir: Path, progress_callback=None) -> Path:
+    target = download_update_file(
+        update["patch_url"], update["patch_sha256"], output_dir, "Oniflow-Patch.zip", progress_callback
+    )
+    validate_update_zip(target)
+    return target
+
+
+def download_update_file(
+    download_url: str,
+    expected_sha256: str,
+    output_dir: Path,
+    fallback_filename: str,
+    progress_callback=None,
+) -> Path:
     output_dir.mkdir(parents=True, exist_ok=True)
-    filename = Path(urllib.parse.urlparse(update["download_url"]).path).name or "Oniflow-Update.exe"
+    filename = Path(urllib.parse.urlparse(download_url).path).name or fallback_filename
     target = output_dir / filename
     digest = hashlib.sha256()
-    with urllib.request.urlopen(update["download_url"], timeout=30) as response, target.open("wb") as handle:
+    with urllib.request.urlopen(download_url, timeout=30) as response, target.open("wb") as handle:
         total = int(response.headers.get("Content-Length") or 0)
         downloaded = 0
         last_report = 0.0
@@ -199,11 +251,19 @@ def download_update_installer(update: dict[str, str], output_dir: Path, progress
                 progress_callback(downloaded, total)
                 last_report = now
     actual = digest.hexdigest().upper()
-    expected = update["sha256"].upper()
+    expected = expected_sha256.upper()
     if actual != expected:
         target.unlink(missing_ok=True)
         raise ValueError(f"Downloaded update checksum mismatch. Expected {expected}, got {actual}.")
     return target
+
+
+def validate_update_zip(path: Path) -> None:
+    with zipfile.ZipFile(path) as archive:
+        for member in archive.infolist():
+            name = member.filename.replace("\\", "/")
+            if not name or name.startswith("/") or name.startswith("../") or "/../" in name:
+                raise ValueError(f"Update patch contains an unsafe path: {member.filename}")
 
 
 def normalize_access_state(state: dict[str, object] | None = None) -> dict[str, object]:
@@ -562,7 +622,12 @@ class AnimeVfiPro:
                 side="left", padx=(24, 8), pady=14
             )
         ctk.CTkLabel(header, text="ONIFLOW", font=("Segoe UI", 25, "bold"), text_color="#f8fafc").pack(
-            side="left", padx=(0, 26) if logo_path.is_file() else 26, pady=20
+            side="left", padx=(0, 8) if logo_path.is_file() else (26, 8), pady=20
+        )
+        ctk.CTkLabel(
+            header, text=f"v{APP_VERSION}", font=("Segoe UI", 11, "bold"), text_color="#64748b"
+        ).pack(
+            side="left", padx=(0, 22), pady=27
         )
         ctk.CTkLabel(
             header, text="AI VIDEO INTERPOLATION", font=("Segoe UI", 11, "bold"), text_color="#38bdf8"
@@ -646,30 +711,41 @@ class AnimeVfiPro:
 
         queue_panel = ctk.CTkFrame(body, fg_color="#0e1525", corner_radius=12, border_width=1, border_color="#18243a")
         queue_panel.grid(row=2, column=0, columnspan=2, sticky="nsew", pady=(12, 0))
-        queue_header = ctk.CTkFrame(queue_panel, fg_color="transparent")
-        queue_header.pack(fill="x", padx=14, pady=(5, 3))
+        queue_header = ctk.CTkFrame(queue_panel, fg_color="transparent", height=42)
+        queue_header.pack(fill="x", padx=14, pady=(3, 3))
+        queue_header.pack_propagate(False)
+        queue_header.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(
             queue_header, text="PROCESS QUEUE", font=("Segoe UI", 12, "bold"), text_color="#cbd5e1"
-        ).pack(side="left")
-        ctk.CTkButton(queue_header, text="Add Video", width=100, height=26, command=self.choose_files).pack(side="right")
+        ).grid(row=0, column=0, sticky="w")
+        queue_actions = ctk.CTkFrame(queue_header, fg_color="transparent")
+        queue_actions.grid(row=0, column=1, sticky="e")
+        queue_button_height = 34
         ctk.CTkButton(
-            queue_header,
-            text="Process Status",
-            width=110,
-            height=26,
-            fg_color="#273449",
-            hover_color="#334155",
-            command=self.open_process_status,
-        ).pack(side="right", padx=(8, 0))
-        ctk.CTkButton(
-            queue_header,
+            queue_actions,
             text="Clear Queue",
             width=100,
-            height=26,
+            height=queue_button_height,
             fg_color="#273449",
             hover_color="#334155",
             command=self.clear_files,
-        ).pack(side="right", padx=8)
+        ).pack(side="left")
+        ctk.CTkButton(
+            queue_actions,
+            text="Process Status",
+            width=110,
+            height=queue_button_height,
+            fg_color="#273449",
+            hover_color="#334155",
+            command=self.open_process_status,
+        ).pack(side="left", padx=(8, 0))
+        ctk.CTkButton(
+            queue_actions,
+            text="Add Video",
+            width=100,
+            height=queue_button_height,
+            command=self.choose_files,
+        ).pack(side="left", padx=(8, 0))
         self.queue_box = ctk.CTkScrollableFrame(
             queue_panel,
             fg_color="#0b1120",
@@ -2114,25 +2190,31 @@ class AnimeVfiPro:
 
     def _confirm_update(self, update: dict[str, str], parent: ctk.CTkToplevel | None) -> None:
         notes = update.get("release_notes") or "No release notes were provided."
+        update_label = "small patch update" if update.get("update_kind") == "patch" else "full installer update"
         message = (
             f"Oniflow {update['latest_version']} is available.\n\n"
             f"{notes}\n\n"
+            f"This will use a {update_label}.\n\n"
             "Download and start the updater now?"
         )
         if not messagebox.askyesno("Oniflow Update", message, parent=parent):
             self._log("Update cancelled by user.")
             return
-        self._log(f"Downloading Oniflow {update['latest_version']}...")
+        if update.get("update_kind") == "patch":
+            self._log(f"Downloading Oniflow {update['latest_version']} patch...")
+        else:
+            self._log(f"Downloading Oniflow {update['latest_version']} installer...")
         threading.Thread(target=self._download_update_worker, args=(update, parent), daemon=True).start()
 
     def _download_update_worker(self, update: dict[str, str], parent: ctk.CTkToplevel | None) -> None:
         try:
-            target = download_update_installer(
-                update,
-                APP_DATA_ROOT / "updates",
-                lambda downloaded, total: self.events.put(("update_progress", (downloaded, total))),
-            )
-            self.root.after(0, lambda: self._launch_update_installer(target, parent))
+            progress = lambda downloaded, total: self.events.put(("update_progress", (downloaded, total)))
+            if update.get("update_kind") == "patch":
+                target = download_update_patch(update, APP_DATA_ROOT / "updates", progress)
+                self.root.after(0, lambda: self._launch_patch_updater(target, update, parent))
+            else:
+                target = download_update_installer(update, APP_DATA_ROOT / "updates", progress)
+                self.root.after(0, lambda: self._launch_update_installer(target, parent))
         except Exception as exc:
             message = str(exc)
             self.events.put(("log", f"Update download failed: {message}"))
@@ -2155,6 +2237,76 @@ class AnimeVfiPro:
             "/CLOSEAPPLICATIONS",
         ])
         self.root.after(1000, self.root.destroy)
+
+    def _launch_patch_updater(self, patch: Path, update: dict[str, str], parent: ctk.CTkToplevel | None) -> None:
+        script = self._write_patch_updater_script()
+        exe_path = self._app_executable_path()
+        self._log(f"Starting patch updater: {patch}")
+        messagebox.showinfo(
+            "Oniflow Update",
+            "The patch updater will start now. Windows may ask for administrator permission.",
+            parent=parent,
+        )
+        args = [
+            "-NoProfile",
+            "-ExecutionPolicy", "Bypass",
+            "-File", str(script),
+            "-ZipPath", str(patch),
+            "-AppDir", str(ROOT),
+            "-ExePath", str(exe_path),
+            "-Pid", str(os.getpid()),
+        ]
+        quoted_args = ", ".join(self._ps_quote(value) for value in args)
+        subprocess.Popen([
+            "powershell.exe",
+            "-NoProfile",
+            "-ExecutionPolicy", "Bypass",
+            "-Command",
+            f"Start-Process -FilePath 'powershell.exe' -ArgumentList @({quoted_args}) -Verb RunAs",
+        ], creationflags=subprocess.CREATE_NO_WINDOW)
+        self.root.after(1000, self.root.destroy)
+
+    @staticmethod
+    def _write_patch_updater_script() -> Path:
+        updater_dir = APP_DATA_ROOT / "updates"
+        updater_dir.mkdir(parents=True, exist_ok=True)
+        script = updater_dir / "apply-oniflow-patch.ps1"
+        script.write_text(
+            """param(
+    [Parameter(Mandatory=$true)][string]$ZipPath,
+    [Parameter(Mandatory=$true)][string]$AppDir,
+    [Parameter(Mandatory=$true)][string]$ExePath,
+    [Parameter(Mandatory=$true)][int]$Pid
+)
+$ErrorActionPreference = 'Stop'
+$LogPath = Join-Path $env:LOCALAPPDATA 'Oniflow\\updates\\patch-update.log'
+try {
+    "Waiting for Oniflow process $Pid" | Out-File -FilePath $LogPath -Encoding utf8
+    Wait-Process -Id $Pid -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 2
+    Expand-Archive -LiteralPath $ZipPath -DestinationPath $AppDir -Force
+    "Patch applied from $ZipPath" | Out-File -FilePath $LogPath -Encoding utf8 -Append
+    Start-Process -FilePath $ExePath
+} catch {
+    $_.Exception.Message | Out-File -FilePath $LogPath -Encoding utf8 -Append
+    Add-Type -AssemblyName PresentationFramework
+    [System.Windows.MessageBox]::Show($_.Exception.Message, 'Oniflow Patch Update Failed') | Out-Null
+}
+""",
+            encoding="utf-8",
+        )
+        return script
+
+    @staticmethod
+    def _app_executable_path() -> Path:
+        if getattr(sys, "frozen", False):
+            return Path(sys.executable)
+        candidate = ROOT / "Oniflow.exe"
+        return candidate if candidate.is_file() else Path(sys.executable)
+
+    @staticmethod
+    def _ps_quote(value: str) -> str:
+        return "'" + value.replace("'", "''") + "'"
 
     @staticmethod
     def _pipeline_python() -> Path:

@@ -1,5 +1,5 @@
 #define MyAppName "Oniflow"
-#define MyAppVersion "0.9.8-beta"
+#define MyAppVersion "0.9.9-beta"
 #define MyAppPublisher "Oniven"
 #define MyAppExeName "Oniflow.exe"
 #define MyAppURL "https://www.instagram.com/oniven.tt/"

@@ -5,6 +5,7 @@ import os
 import json
 import hashlib
 import inspect
+import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
@@ -90,6 +91,31 @@ class ProductTests(unittest.TestCase):
         self.assertIn('"update_progress"', gui)
         self.assertIn("fetch_github_release_update", gui)
         self.assertIn('"release_api_url"', gui)
+        self.assertIn('text=f"v{APP_VERSION}"', gui)
+        self.assertIn("download_update_patch", gui)
+        self.assertIn("_launch_patch_updater", gui)
+        self.assertTrue((ROOT / "build_patch.ps1").is_file())
+
+    def test_patch_asset_matching_and_zip_validation(self):
+        assets = [
+            {"name": "Oniflow-Setup-0.9.9-beta.exe"},
+            {"name": "Oniflow-Patch-0.9.8-beta-to-0.9.9-beta.zip", "digest": "sha256:abc"},
+        ]
+        patch = anime_vfi_gui.compatible_patch_asset(assets, "0.9.8-beta", "0.9.9-beta")
+        self.assertIsNotNone(patch)
+        self.assertIsNone(anime_vfi_gui.compatible_patch_asset(assets, "0.9.7-beta", "0.9.9-beta"))
+
+        with tempfile.TemporaryDirectory() as directory:
+            safe_zip = Path(directory) / "safe.zip"
+            with zipfile.ZipFile(safe_zip, "w") as archive:
+                archive.writestr("update_config.json", "{}")
+            anime_vfi_gui.validate_update_zip(safe_zip)
+
+            unsafe_zip = Path(directory) / "unsafe.zip"
+            with zipfile.ZipFile(unsafe_zip, "w") as archive:
+                archive.writestr("../escape.txt", "bad")
+            with self.assertRaises(ValueError):
+                anime_vfi_gui.validate_update_zip(unsafe_zip)
 
     def test_job_defaults_are_available_and_applied(self):
         source = (ROOT / "anime_vfi_gui.py").read_text(encoding="utf-8")
