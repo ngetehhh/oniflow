@@ -1,6 +1,6 @@
 {
-    "latest_version":  "0.9.7-beta",
-    "download_url":  "https://github.com/ngetehhh/oniflow/releases/download/v0.9.7-beta/Oniflow-Setup-0.9.7-beta.exe",
-    "sha256":  "6CAD97FB478237138A7981C76FE696A174EEE492910C8C724667826B665C5DBA",
-    "release_notes":  "Moves update checks to a stable manifest URL so future updates reach all installed users more reliably."
+    "latest_version":  "0.9.8-beta",
+    "download_url":  "https://github.com/ngetehhh/oniflow/releases/download/v0.9.8-beta/Oniflow-Setup-0.9.8-beta.exe",
+    "sha256":  "8E853F7277DC1481F19D8E0A282740CEF2502743046F19E82FD99DCF1292CC23",
+    "release_notes":  "Uses the GitHub Releases API as the primary update source, so future releases can be detected without manually editing update.json."
 }

@@ -1,6 +1,6 @@
 # Oniflow End User License Agreement
 
-Version: 0.9.7-beta
+Version: 0.9.8-beta
 
 This draft must be reviewed by qualified legal counsel before commercial release.
 

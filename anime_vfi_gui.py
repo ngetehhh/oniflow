@@ -77,7 +77,7 @@ DEFAULT_SETTINGS = {
     "default_output_format": "MP4",
     "default_slow_motion": "Off",
 }
-APP_VERSION = "0.9.7-beta"
+APP_VERSION = "0.9.8-beta"
 UPDATE_REQUEST_HEADERS = {
     "Accept": "application/json, text/plain, */*",
     "User-Agent": f"Oniflow/{APP_VERSION}",
@@ -113,10 +113,11 @@ def parse_iso_datetime(value: object) -> datetime | None:
 
 def load_update_config(path: Path = UPDATE_CONFIG_PATH) -> dict[str, str]:
     if not path.is_file():
-        return {"manifest_url": "", "channel": "beta"}
+        return {"manifest_url": "", "release_api_url": "", "channel": "beta"}
     data = json.loads(path.read_text(encoding="utf-8"))
     return {
         "manifest_url": str(data.get("manifest_url", "")).strip(),
+        "release_api_url": str(data.get("release_api_url", "")).strip(),
         "channel": str(data.get("channel", "beta")).strip() or "beta",
     }
 
@@ -131,6 +132,41 @@ def fetch_update_manifest(manifest_url: str, timeout: int = 12) -> dict[str, str
         "sha256": str(data["sha256"]).strip().upper(),
         "release_notes": str(data.get("release_notes", "")).strip(),
     }
+
+
+def fetch_github_release_update(release_api_url: str, channel: str = "beta", timeout: int = 12) -> dict[str, str]:
+    request = urllib.request.Request(release_api_url, headers=UPDATE_REQUEST_HEADERS)
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        releases = json.loads(response.read().decode("utf-8"))
+    allow_prerelease = channel.lower() == "beta"
+    for release in releases:
+        if release.get("draft"):
+            continue
+        if release.get("prerelease") and not allow_prerelease:
+            continue
+        tag = str(release.get("tag_name", "")).strip()
+        version = tag.removeprefix("v")
+        assets = release.get("assets") or []
+        installer = next(
+            (
+                asset for asset in assets
+                if str(asset.get("name", "")).lower().startswith("oniflow-setup-")
+                and str(asset.get("name", "")).lower().endswith(".exe")
+            ),
+            None,
+        )
+        if not version or not installer:
+            continue
+        digest = str(installer.get("digest", "")).strip()
+        if not digest.lower().startswith("sha256:"):
+            continue
+        return {
+            "latest_version": version,
+            "download_url": str(installer["browser_download_url"]).strip(),
+            "sha256": digest.split(":", 1)[1].strip().upper(),
+            "release_notes": str(release.get("body", "")).strip(),
+        }
+    raise RuntimeError("No compatible Oniflow update release was found.")
 
 
 def friendly_update_error(exc: Exception) -> str:
@@ -2046,10 +2082,20 @@ class AnimeVfiPro:
     def _check_for_updates_worker(self, parent: ctk.CTkToplevel | None, automatic: bool = False) -> None:
         try:
             config = load_update_config()
+            release_api_url = config["release_api_url"]
             manifest_url = config["manifest_url"]
-            if not manifest_url:
-                raise RuntimeError("Update manifest URL is not configured.")
-            update = fetch_update_manifest(manifest_url)
+            if release_api_url:
+                try:
+                    update = fetch_github_release_update(release_api_url, config["channel"])
+                except Exception as exc:
+                    if not manifest_url:
+                        raise
+                    self.events.put(("log", f"GitHub release update check failed, using manifest fallback: {exc}"))
+                    update = fetch_update_manifest(manifest_url)
+            else:
+                if not manifest_url:
+                    raise RuntimeError("Update source is not configured.")
+                update = fetch_update_manifest(manifest_url)
             self._record_update_check()
             if not update_is_newer(update["latest_version"]):
                 if not automatic:
