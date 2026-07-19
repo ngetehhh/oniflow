@@ -1,6 +1,6 @@
 {
-    "latest_version":  "0.9.6-beta",
-    "download_url":  "https://github.com/ngetehhh/oniflow/releases/download/v0.9.6-beta/Oniflow-Setup-0.9.6-beta.exe",
-    "sha256":  "922F5F40C755A28F82780882C5A660DD57A536E204F97DBEDC8803566371F873",
-    "release_notes":  "Adds MOV, MOV with Alpha, and visible update download progress while keeping prior interpolation and updater fixes."
+    "latest_version":  "0.9.7-beta",
+    "download_url":  "https://github.com/ngetehhh/oniflow/releases/download/v0.9.7-beta/Oniflow-Setup-0.9.7-beta.exe",
+    "sha256":  "6CAD97FB478237138A7981C76FE696A174EEE492910C8C724667826B665C5DBA",
+    "release_notes":  "Moves update checks to a stable manifest URL so future updates reach all installed users more reliably."
 }
