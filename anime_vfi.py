@@ -271,12 +271,30 @@ def render_template(template: list[str], values: dict[str, str]) -> list[str]:
         raise PipelineError(f"Placeholder konfigurasi tidak dikenal: {exc}") from exc
 
 
+def resolve_engine_python(command: list[str]) -> list[str]:
+    """Use current Python for source checkouts without bundled runtime."""
+    if not command:
+        return command
+    executable = Path(command[0])
+    if executable.is_file():
+        return command
+    if executable.name.lower() == "python.exe":
+        fallback = Path(sys.executable).resolve()
+        print(
+            f"VFI_NOTICE bundled Python not found; using current Python: {fallback}",
+            flush=True,
+        )
+        return [str(fallback), *command[1:]]
+    return command
+
+
 def validate_engine_command(command: list[str], cwd: Path | None) -> None:
     """Allow only the bundled GMFSS inference entry point."""
     project_root = Path(__file__).resolve().parent
     allowed_python = {
         (project_root / "work" / "python-runtime" / "python.exe").resolve(),
         (project_root / "work" / "gmfss-venv" / "Scripts" / "python.exe").resolve(),
+        Path(sys.executable).resolve(),
     }
     allowed_cwd = (project_root / "work" / "GMFSS_Fortuna").resolve()
     if len(command) < 2:
@@ -435,17 +453,54 @@ def mux_final(
             command.extend(["-map", "1:s?", "-c:s", "copy"])
         command.extend(["-c:a", "copy" if audio.get("copy_for_mkv", True) else "aac"])
     command.extend(["-shortest", str(output)])
-    try:
-        run_command(command)
-    except subprocess.CalledProcessError:
-        if not is_mp4 or mute_audio or slow_motion or not source_available or "-c:a" not in command:
+
+    def replace_option(arguments: list[str], option: str, value: str) -> list[str]:
+        updated = list(arguments)
+        if option in updated:
+            index = updated.index(option) + 1
+            if index < len(updated):
+                updated[index] = value
+        return updated
+
+    def run_mux_attempt(arguments: list[str]) -> None:
+        try:
+            run_command(arguments)
+        except subprocess.CalledProcessError:
+            if not is_mp4 or mute_audio or slow_motion or not source_available or "-c:a" not in arguments:
+                raise
+            print("VFI_NOTICE source audio is not MP4-compatible; falling back to AAC", flush=True)
+            fallback = list(arguments)
+            audio_codec_index = fallback.index("-c:a") + 1
+            fallback[audio_codec_index] = audio.get("mp4_fallback_codec", "aac")
+            fallback[audio_codec_index + 1:audio_codec_index + 1] = ["-q:a", "2"]
+            run_command(fallback)
+
+    attempts = [("configured encoder", command)]
+    if is_mp4 and codec == "av1_nvenc":
+        h264_command = replace_option(command, "-c:v", "h264_nvenc")
+        h264_command = replace_option(h264_command, "-pix_fmt", "yuv420p")
+        attempts.append(("H.264 NVENC fallback", h264_command))
+
+        software_command = replace_option(h264_command, "-c:v", "libx264")
+        software_command = replace_option(software_command, "-preset", "medium")
+        software_command = remove_command_options(software_command, {"-cq", "-multipass", "-tune"})
+        output_argument = software_command.pop()
+        software_command.extend(["-crf", "16", output_argument])
+        attempts.append(("H.264 software fallback", software_command))
+
+    last_error: subprocess.CalledProcessError | None = None
+    for attempt_name, attempt_command in attempts:
+        try:
+            if attempt_name != "configured encoder":
+                print(f"VFI_NOTICE trying {attempt_name}", flush=True)
+            run_mux_attempt(attempt_command)
+            break
+        except subprocess.CalledProcessError as exc:
+            last_error = exc
+            if attempt_command is not attempts[-1][1]:
+                output.unlink(missing_ok=True)
+                continue
             raise
-        print("VFI_NOTICE source audio is not MP4-compatible; falling back to AAC", flush=True)
-        fallback = list(command)
-        audio_codec_index = fallback.index("-c:a") + 1
-        fallback[audio_codec_index] = audio.get("mp4_fallback_codec", "aac")
-        fallback[audio_codec_index + 1:audio_codec_index + 1] = ["-q:a", "2"]
-        run_command(fallback)
     output_info = probe_video(output)
     if (output_info.width, output_info.height) != (source_info.width, source_info.height):
         output.unlink(missing_ok=True)
@@ -516,9 +571,14 @@ def interpolate_gmfss(
         "temp_dir": str(temp_dir.resolve()),
     }
     cwd_value = engine.get("cwd")
-    cwd = Path(str(cwd_value).format(**values)).resolve() if cwd_value else None
+    cwd = None
+    if cwd_value:
+        cwd_path = Path(str(cwd_value).format(**values))
+        if not cwd_path.is_absolute():
+            cwd_path = Path(__file__).resolve().parent / cwd_path
+        cwd = cwd_path.resolve()
     print("VFI_STAGE interpolate", flush=True)
-    command = render_template(template, values)
+    command = resolve_engine_python(render_template(template, values))
     validate_engine_command(command, cwd)
     if scene_threshold is not None:
         command.extend(["--scene-threshold", str(scene_threshold)])
@@ -535,7 +595,20 @@ def interpolate_gmfss(
             silent_video.unlink(missing_ok=True)
             retry_values = dict(values)
             retry_values["scale"] = "0.5"
-            retry_command = render_template(template, retry_values)
+            retry_command = resolve_engine_python(render_template(template, retry_values))
+            if scene_threshold is not None:
+                retry_command.extend(["--scene-threshold", str(scene_threshold)])
+            if static_threshold is not None:
+                retry_command.extend(["--static-threshold", str(static_threshold)])
+            if throttle_ms > 0:
+                retry_command.extend(["--throttle-ms", str(throttle_ms)])
+            run_command(retry_command, cwd=cwd)
+        elif "out of memory" in error_output and scale > 0.25:
+            print("VFI_NOTICE GPU memory limit reached; retrying at motion scale 0.25", flush=True)
+            silent_video.unlink(missing_ok=True)
+            retry_values = dict(values)
+            retry_values["scale"] = "0.25"
+            retry_command = resolve_engine_python(render_template(template, retry_values))
             if scene_threshold is not None:
                 retry_command.extend(["--scene-threshold", str(scene_threshold)])
             if static_threshold is not None:
@@ -544,7 +617,7 @@ def interpolate_gmfss(
                 retry_command.extend(["--throttle-ms", str(throttle_ms)])
             run_command(retry_command, cwd=cwd)
         elif "out of memory" in error_output:
-            raise PipelineError("GPU VRAM tidak cukup untuk video ini. Gunakan 4K Processing Mode: Memory Saver.") from exc
+            raise PipelineError("GPU VRAM tidak cukup untuk video ini. Coba Flow 2x atau 4x untuk clip 4K.") from exc
         elif "--amp" not in command:
             raise
         else:
@@ -654,8 +727,13 @@ def interpolate_gmfss_batch(
             prepared.append((input_path, output_path, silent_video, info))
         assert first_values is not None
         cwd_value = engine.get("cwd")
-        cwd = Path(str(cwd_value).format(**first_values)).resolve() if cwd_value else None
-        command = render_template(template, first_values)
+        cwd = None
+        if cwd_value:
+            cwd_path = Path(str(cwd_value).format(**first_values))
+            if not cwd_path.is_absolute():
+                cwd_path = Path(__file__).resolve().parent / cwd_path
+            cwd = cwd_path.resolve()
+        command = resolve_engine_python(render_template(template, first_values))
         command = remove_command_options(command, {"--video", "--output", "--fps", "--multi", "--scale"})
         command.extend(["--batch-manifest", str(manifest_path.resolve())])
         validate_engine_command(command, cwd)

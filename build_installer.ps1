@@ -10,12 +10,17 @@ $CompilerCandidates = @(
     "C:\Program Files\Inno Setup 6\ISCC.exe"
 )
 $Compiler = $CompilerCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+$Python = Join-Path $Root "work\gmfss-venv\Scripts\python.exe"
 
 if (-not $Compiler) {
     throw "Inno Setup 6 is not installed. Install it, then run build_installer.ps1 again."
 }
+if (-not (Test-Path $Python)) {
+    $Python = (Get-Command python -ErrorAction Stop).Source
+    Write-Host "Using current Python runtime: $Python"
+}
 
-& (Join-Path $Root "work\gmfss-venv\Scripts\python.exe") (Join-Path $Root "release_audit.py") (Join-Path $Root "release\Oniflow")
+& $Python (Join-Path $Root "release_audit.py") (Join-Path $Root "release\Oniflow")
 if ($LASTEXITCODE -ne 0) { throw "Release security audit failed. Rebuild the portable package first." }
 
 & $Compiler (Join-Path $Root "installer.iss")

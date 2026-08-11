@@ -6,6 +6,7 @@ param(
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Python = Join-Path $Root "work\gmfss-venv\Scripts\python.exe"
+$DependencySitePackages = Join-Path $Root "work\gmfss-venv\Lib\site-packages"
 $IntegrityAdmin = Join-Path $Root "integrity_admin.py"
 $Dist = Join-Path $Root "dist"
 $LauncherDist = Join-Path $Dist "launcher-build"
@@ -25,7 +26,11 @@ $ReleaseDocuments = @(
     "RELEASE_CHECKLIST.md"
 )
 
-if (-not (Test-Path $Python)) { throw "Oniflow Python environment is missing." }
+if (-not (Test-Path $Python)) {
+    $Python = (Get-Command python -ErrorAction Stop).Source
+    $DependencySitePackages = (& $Python -c "import sysconfig; print(sysconfig.get_paths()['purelib'])").Trim()
+    Write-Host "Using current Python runtime: $Python"
+}
 if (-not (Test-Path $IntegrityAdmin)) {
     throw "Owner-only integrity_admin.py is missing. Keep it local and outside public GitHub before building a signed release."
 }
@@ -53,14 +58,14 @@ if ($NativeLauncher) {
 }
 
 New-Item -ItemType Directory -Force (Join-Path $ReleaseRoot "work\GMFSS_Fortuna") | Out-Null
-robocopy (Join-Path $Root "work\GMFSS_Fortuna") (Join-Path $ReleaseRoot "work\GMFSS_Fortuna") /E /XD .git __pycache__ temp vid_out /XF *.pyc *.pyo | Out-Null
+robocopy (Join-Path $Root "work\GMFSS_Fortuna") (Join-Path $ReleaseRoot "work\GMFSS_Fortuna") /E /XD ".git" "__pycache__" "temp" "vid_out" /XF "*.pyc" "*.pyo" | Out-Null
 if ($LASTEXITCODE -gt 7) { throw "Failed to copy the GMFSS backend." }
 New-Item -ItemType Directory -Force $PortableRuntime | Out-Null
-robocopy $BasePython $PortableRuntime /E /XD __pycache__ site-packages venv /XF *.pyc *.pyo | Out-Null
+robocopy $BasePython $PortableRuntime /E /XD "__pycache__" "site-packages" "venv" /XF "*.pyc" "*.pyo" | Out-Null
 if ($LASTEXITCODE -gt 7) { throw "Failed to copy the standalone Python runtime." }
 New-Item -ItemType Directory -Force (Join-Path $PortableRuntime "Lib\site-packages") | Out-Null
-robocopy (Join-Path $Root "work\gmfss-venv\Lib\site-packages") (Join-Path $PortableRuntime "Lib\site-packages") /E /XD __pycache__ pip pip-* setuptools setuptools-* pip_audit pip_audit-* /XF *.pyc *.pyo direct_url.json | Out-Null
-if ($LASTEXITCODE -gt 7) { throw "Failed to copy Python dependencies." }
+$PortableSitePackages = Join-Path $PortableRuntime "Lib\site-packages"
+Copy-Item -Path (Join-Path $DependencySitePackages "*") -Destination $PortableSitePackages -Recurse -Force
 $SitePackages = Join-Path $PortableRuntime "Lib\site-packages"
 $PrunedRuntimePackages = @(
     "PyInstaller",
@@ -79,6 +84,8 @@ $PrunedRuntimePackages = @(
     "absl-*",
     "cyclonedx",
     "cyclonedx-*",
+    "cryptography",
+    "cryptography-*",
     "fontTools",
     "fonttools-*",
     "fsspec",
@@ -92,6 +99,8 @@ $PrunedRuntimePackages = @(
     "networkx-*",
     "pygments",
     "pygments-*",
+    "playwright",
+    "playwright-*",
     "rawpy",
     "rawpy-*",
     "rich",
@@ -127,10 +136,6 @@ Get-ChildItem -Path $SitePackages -Recurse -Force -File -ErrorAction SilentlyCon
         $_.Extension -in @(".lib", ".h", ".hpp", ".pxd", ".pyx", ".whl")
     } |
     Remove-Item -Force
-Get-ChildItem -Path $SitePackages -Directory -Recurse -Force -Filter "tests" |
-    Remove-Item -Recurse -Force
-Get-ChildItem -Path $SitePackages -Directory -Recurse -Force -Filter "test" |
-    Remove-Item -Recurse -Force
 Copy-Item -Force (Join-Path $Root "anime_vfi.py") (Join-Path $ReleaseRoot "anime_vfi.py")
 Copy-Item -Force (Join-Path $Root "anime_vfi_gui.py") (Join-Path $ReleaseRoot "anime_vfi_gui.py")
 Copy-Item -Force (Join-Path $Root "offline_license.py") (Join-Path $ReleaseRoot "offline_license.py")

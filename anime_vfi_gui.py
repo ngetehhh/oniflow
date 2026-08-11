@@ -79,7 +79,7 @@ DEFAULT_SETTINGS = {
     "default_output_format": "MP4",
     "default_slow_motion": "Off",
 }
-APP_VERSION = "0.9.9-beta"
+APP_VERSION = "0.9.10-beta"
 UPDATE_REQUEST_HEADERS = {
     "Accept": "application/json, text/plain, */*",
     "User-Agent": f"Oniflow/{APP_VERSION}",

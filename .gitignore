@@ -16,6 +16,7 @@ offline_license_gui.py
 
 work/
 release/
+patches/
 dist/
 build/
 installer-output/

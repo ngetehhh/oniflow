@@ -1,6 +1,11 @@
 {
-    "latest_version":  "0.9.9-beta",
-    "download_url":  "https://github.com/ngetehhh/oniflow/releases/download/v0.9.9-beta/Oniflow-Setup-0.9.9-beta.exe",
-    "sha256":  "2B65F4915788C42A5568F617255511E1933C691B8002423171647191772D5A36",
-    "release_notes":  "Adds small patch update support for future releases and shows the Oniflow version in the main UI."
+    "latest_version":  "0.9.10-beta",
+    "download_url":  "https://github.com/ngetehhh/oniflow/releases/download/v0.9.10-beta/Oniflow-Setup-0.9.10-beta.exe",
+    "sha256":  "9D54DCE0F35B2F758B3FE5C53920CBF56E616737CF68399C66EDE9B4C5548153",
+    "release_notes":  "Removes the Turbo setting. GMFSS now always uses the stable optimized path.",
+    "patch": {
+        "from_version": "0.9.9-beta",
+        "download_url": "https://github.com/ngetehhh/oniflow/releases/download/v0.9.10-beta/Oniflow-Patch-0.9.9-beta-to-0.9.10-beta.zip",
+        "sha256": "94531D78F5C45C343DD65505B46F201D5842AEF22845DA3C2CF93BD4FF10255C"
+    }
 }

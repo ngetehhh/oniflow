@@ -48,6 +48,12 @@ class CoreTests(unittest.TestCase):
         with self.assertRaises(MODULE.PipelineError):
             MODULE.render_template(["{unknown}"], {})
 
+    def test_missing_bundled_python_falls_back_to_current_python(self):
+        command = MODULE.resolve_engine_python(
+            [str(ROOT / "work" / "missing-runtime" / "python.exe"), "inference_video.py"]
+        )
+        self.assertEqual(Path(command[0]).resolve(), Path(sys.executable).resolve())
+
     def test_parser_accepts_multiplier_ten(self):
         parser = MODULE.build_parser()
         args = parser.parse_args(

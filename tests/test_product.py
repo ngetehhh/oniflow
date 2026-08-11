@@ -91,6 +91,9 @@ class ProductTests(unittest.TestCase):
         self.assertIn('"update_progress"', gui)
         self.assertIn("fetch_github_release_update", gui)
         self.assertIn('"release_api_url"', gui)
+        self.assertNotIn('"turbo_mode"', gui)
+        self.assertNotIn('command.append("--turbo")', gui)
+        self.assertNotIn('add_argument("--turbo"', (ROOT / "anime_vfi.py").read_text(encoding="utf-8"))
         self.assertIn('text=f"v{APP_VERSION}"', gui)
         self.assertIn("download_update_patch", gui)
         self.assertIn("_launch_patch_updater", gui)
@@ -172,7 +175,7 @@ class ProductTests(unittest.TestCase):
 
     def test_release_build_excludes_git_metadata(self):
         script = (ROOT / "build_release.ps1").read_text(encoding="utf-8")
-        self.assertIn("/XD .git __pycache__", script)
+        self.assertIn('"__pycache__"', script)
         self.assertIn("work\\python-runtime", script)
         self.assertIn("oniflow_launcher.py", script)
         self.assertIn('release\\Oniflow', script)
@@ -474,7 +477,7 @@ class ProductTests(unittest.TestCase):
         self.assertIn('"Lib\\site-packages\\torch\\include"', release)
         self.assertIn('".whl"', release)
         self.assertIn('".lib"', release)
-        self.assertIn('-Filter "tests"', release)
+        self.assertIn('-Filter "__pycache__"', release)
 
 
 if __name__ == "__main__":
