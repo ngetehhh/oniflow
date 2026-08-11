@@ -79,7 +79,7 @@ DEFAULT_SETTINGS = {
     "default_output_format": "MP4",
     "default_slow_motion": "Off",
 }
-APP_VERSION = "0.9.10-beta"
+APP_VERSION = "0.9.11-beta"
 UPDATE_REQUEST_HEADERS = {
     "Accept": "application/json, text/plain, */*",
     "User-Agent": f"Oniflow/{APP_VERSION}",
@@ -2241,29 +2241,41 @@ class AnimeVfiPro:
     def _launch_patch_updater(self, patch: Path, update: dict[str, str], parent: ctk.CTkToplevel | None) -> None:
         script = self._write_patch_updater_script()
         exe_path = self._app_executable_path()
+        updater_dir = APP_DATA_ROOT / "updates"
+        updater_dir.mkdir(parents=True, exist_ok=True)
+        request = updater_dir / "patch-request.json"
+        request.write_text(
+            json.dumps(
+                {
+                    "zip_path": str(patch.resolve()),
+                    "app_dir": str(ROOT.resolve()),
+                    "exe_path": str(exe_path.resolve()),
+                    "process_id": os.getpid(),
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
         self._log(f"Starting patch updater: {patch}")
         messagebox.showinfo(
             "Oniflow Update",
             "The patch updater will start now. Windows may ask for administrator permission.",
             parent=parent,
         )
-        args = [
-            "-NoProfile",
-            "-ExecutionPolicy", "Bypass",
-            "-File", str(script),
-            "-ZipPath", str(patch),
-            "-AppDir", str(ROOT),
-            "-ExePath", str(exe_path),
-            "-Pid", str(os.getpid()),
-        ]
-        quoted_args = ", ".join(self._ps_quote(value) for value in args)
-        subprocess.Popen([
+        powershell_args = (
+            f'-NoProfile -ExecutionPolicy Bypass -File "{script}" '
+            f'-RequestPath "{request}"'
+        )
+        result = ctypes.windll.shell32.ShellExecuteW(
+            None,
+            "runas",
             "powershell.exe",
-            "-NoProfile",
-            "-ExecutionPolicy", "Bypass",
-            "-Command",
-            f"Start-Process -FilePath 'powershell.exe' -ArgumentList @({quoted_args}) -Verb RunAs",
-        ], creationflags=subprocess.CREATE_NO_WINDOW)
+            powershell_args,
+            None,
+            0,
+        )
+        if result <= 32:
+            raise RuntimeError(f"Windows could not start the patch updater (code {result}).")
         self.root.after(1000, self.root.destroy)
 
     @staticmethod
@@ -2273,21 +2285,37 @@ class AnimeVfiPro:
         script = updater_dir / "apply-oniflow-patch.ps1"
         script.write_text(
             """param(
-    [Parameter(Mandatory=$true)][string]$ZipPath,
-    [Parameter(Mandatory=$true)][string]$AppDir,
-    [Parameter(Mandatory=$true)][string]$ExePath,
-    [Parameter(Mandatory=$true)][int]$Pid
+    [Parameter(Mandatory=$true)][string]$RequestPath
 )
 $ErrorActionPreference = 'Stop'
-$LogPath = Join-Path $env:LOCALAPPDATA 'Oniflow\\updates\\patch-update.log'
+$UpdateDir = Join-Path $env:LOCALAPPDATA 'Oniflow\\updates'
+$LogPath = Join-Path $UpdateDir 'patch-update.log'
 try {
-    "Waiting for Oniflow process $Pid" | Out-File -FilePath $LogPath -Encoding utf8
-    Wait-Process -Id $Pid -ErrorAction SilentlyContinue
+    New-Item -ItemType Directory -Force -Path $UpdateDir | Out-Null
+    "Patch updater started: $(Get-Date -Format o)" | Set-Content -Path $LogPath -Encoding utf8
+    if (-not (Test-Path -LiteralPath $RequestPath)) {
+        throw "Patch request file was not found: $RequestPath"
+    }
+    $request = Get-Content -LiteralPath $RequestPath -Raw | ConvertFrom-Json
+    $zipPath = [string]$request.zip_path
+    $appDir = [string]$request.app_dir
+    $exePath = [string]$request.exe_path
+    $processId = [int]$request.process_id
+    if (-not (Test-Path -LiteralPath $zipPath)) {
+        throw "Patch archive was not found: $zipPath"
+    }
+    if (-not (Test-Path -LiteralPath $appDir)) {
+        throw "Oniflow folder was not found: $appDir"
+    }
+    "Waiting for Oniflow process $processId" | Out-File -FilePath $LogPath -Encoding utf8 -Append
+    Wait-Process -Id $processId -ErrorAction SilentlyContinue
     Start-Sleep -Seconds 2
-    Expand-Archive -LiteralPath $ZipPath -DestinationPath $AppDir -Force
-    "Patch applied from $ZipPath" | Out-File -FilePath $LogPath -Encoding utf8 -Append
-    Start-Process -FilePath $ExePath
+    Expand-Archive -LiteralPath $zipPath -DestinationPath $appDir -Force
+    "Patch applied from $zipPath" | Out-File -FilePath $LogPath -Encoding utf8 -Append
+    Start-Process -FilePath $exePath
+    "Oniflow restarted: $exePath" | Out-File -FilePath $LogPath -Encoding utf8 -Append
 } catch {
+    New-Item -ItemType Directory -Force -Path $UpdateDir | Out-Null
     $_.Exception.Message | Out-File -FilePath $LogPath -Encoding utf8 -Append
     Add-Type -AssemblyName PresentationFramework
     [System.Windows.MessageBox]::Show($_.Exception.Message, 'Oniflow Patch Update Failed') | Out-Null
@@ -2303,10 +2331,6 @@ try {
             return Path(sys.executable)
         candidate = ROOT / "Oniflow.exe"
         return candidate if candidate.is_file() else Path(sys.executable)
-
-    @staticmethod
-    def _ps_quote(value: str) -> str:
-        return "'" + value.replace("'", "''") + "'"
 
     @staticmethod
     def _pipeline_python() -> Path:

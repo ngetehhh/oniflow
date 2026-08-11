@@ -97,6 +97,9 @@ class ProductTests(unittest.TestCase):
         self.assertIn('text=f"v{APP_VERSION}"', gui)
         self.assertIn("download_update_patch", gui)
         self.assertIn("_launch_patch_updater", gui)
+        self.assertIn("ShellExecuteW", gui)
+        self.assertIn("patch-request.json", gui)
+        self.assertIn("-RequestPath", gui)
         self.assertTrue((ROOT / "build_patch.ps1").is_file())
 
     def test_patch_asset_matching_and_zip_validation(self):
