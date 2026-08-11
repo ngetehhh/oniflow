@@ -2,10 +2,5 @@
     "latest_version":  "0.9.11-beta",
     "download_url":  "https://github.com/ngetehhh/oniflow/releases/download/v0.9.11-beta/Oniflow-Setup-0.9.11-beta.exe",
     "sha256":  "3D06D77C5D22E29019CB30780EDE267294B529C8A577F9AAB07A42326133F9D3",
-    "release_notes":  "Fixes one-click patch updates. Turbo remains removed and GMFSS uses the stable optimized path.",
-    "patch": {
-        "from_version": "0.9.9-beta",
-        "download_url": "https://github.com/ngetehhh/oniflow/releases/download/v0.9.11-beta/Oniflow-Patch-0.9.9-beta-to-0.9.11-beta.zip",
-        "sha256": "B2C17E55A6B3E67B0948B85F074D053F226EF8FB5B2F05CEA3BFEED70BA21F29"
-    }
+    "release_notes":  "Fixes one-click patch updates. Turbo remains removed and GMFSS uses the stable optimized path."
 }
