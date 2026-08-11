@@ -1,6 +1,9 @@
 param(
     [switch]$NativeLauncher,
-    [switch]$SignFiles
+    [switch]$SignFiles,
+    [switch]$SkipLauncherBuild,
+    [switch]$SkipRuntimeCopy,
+    [switch]$SkipRuntimePrune
 )
 
 $ErrorActionPreference = "Stop"
@@ -36,37 +39,50 @@ if (-not (Test-Path $IntegrityAdmin)) {
 }
 $BasePython = (& $Python -c "import sys; print(sys.base_prefix)").Trim()
 if (-not (Test-Path (Join-Path $BasePython "python.exe"))) { throw "Base Python runtime is missing." }
-Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $LauncherDist
-Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $NativeDist
-Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $ReleaseRoot
-New-Item -ItemType Directory -Force $ReleaseRoot | Out-Null
-if ($NativeLauncher) {
-    & $Python -m pip show nuitka *> $null
-    if ($LASTEXITCODE -ne 0) { throw "Nuitka is missing. Run setup_native_build.ps1 first." }
-    New-Item -ItemType Directory -Force $NativeDist | Out-Null
-    & $Python -m nuitka --mode=onefile --windows-console-mode=disable --assume-yes-for-downloads `
-        --output-dir=$NativeDist --output-filename=Oniflow.exe `
-        --windows-icon-from-ico=$IconPath $LauncherSource
-    if ($LASTEXITCODE -ne 0) { throw "Native Oniflow launcher build failed." }
-    Copy-Item -Force (Join-Path $NativeDist "Oniflow.exe") (Join-Path $ReleaseRoot "Oniflow.exe")
+$PythonVersion = (& $Python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')").Trim()
+if ($PythonVersion -ne "3.10") {
+    throw "Oniflow must be built with Python 3.10. Found Python $PythonVersion at $Python."
+}
+if ($SkipLauncherBuild) {
+    if (-not (Test-Path (Join-Path $ReleaseRoot "Oniflow.exe"))) {
+        throw "Cannot skip launcher build because release\\Oniflow\\Oniflow.exe is missing."
+    }
 } else {
-    & $Python -m pip show pyinstaller *> $null
-    if ($LASTEXITCODE -ne 0) { throw "PyInstaller is missing. Install it before creating a standard release." }
-    & $Python -m PyInstaller --noconfirm --clean --windowed --name Oniflow --distpath $LauncherDist --icon $IconPath $LauncherSource
-    if ($LASTEXITCODE -ne 0) { throw "Oniflow launcher build failed. Close any running portable Oniflow instance and try again." }
-    Copy-Item -Recurse -Force (Join-Path $LauncherDist "Oniflow\*") $ReleaseRoot
+    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $LauncherDist
+    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $NativeDist
+    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $ReleaseRoot
+    New-Item -ItemType Directory -Force $ReleaseRoot | Out-Null
+    if ($NativeLauncher) {
+        & $Python -m pip show nuitka *> $null
+        if ($LASTEXITCODE -ne 0) { throw "Nuitka is missing. Run setup_native_build.ps1 first." }
+        New-Item -ItemType Directory -Force $NativeDist | Out-Null
+        & $Python -m nuitka --mode=onefile --windows-console-mode=disable --assume-yes-for-downloads `
+            --output-dir=$NativeDist --output-filename=Oniflow.exe `
+            --windows-icon-from-ico=$IconPath $LauncherSource
+        if ($LASTEXITCODE -ne 0) { throw "Native Oniflow launcher build failed." }
+        Copy-Item -Force (Join-Path $NativeDist "Oniflow.exe") (Join-Path $ReleaseRoot "Oniflow.exe")
+    } else {
+        & $Python -m pip show pyinstaller *> $null
+        if ($LASTEXITCODE -ne 0) { throw "PyInstaller is missing. Install it before creating a standard release." }
+        & $Python -m PyInstaller --noconfirm --clean --windowed --name Oniflow --distpath $LauncherDist --icon $IconPath $LauncherSource
+        if ($LASTEXITCODE -ne 0) { throw "Oniflow launcher build failed. Close any running portable Oniflow instance and try again." }
+        Copy-Item -Recurse -Force (Join-Path $LauncherDist "Oniflow\*") $ReleaseRoot
+    }
 }
 
-New-Item -ItemType Directory -Force (Join-Path $ReleaseRoot "work\GMFSS_Fortuna") | Out-Null
-robocopy (Join-Path $Root "work\GMFSS_Fortuna") (Join-Path $ReleaseRoot "work\GMFSS_Fortuna") /E /XD ".git" "__pycache__" "temp" "vid_out" /XF "*.pyc" "*.pyo" | Out-Null
-if ($LASTEXITCODE -gt 7) { throw "Failed to copy the GMFSS backend." }
-New-Item -ItemType Directory -Force $PortableRuntime | Out-Null
-robocopy $BasePython $PortableRuntime /E /XD "__pycache__" "site-packages" "venv" /XF "*.pyc" "*.pyo" | Out-Null
-if ($LASTEXITCODE -gt 7) { throw "Failed to copy the standalone Python runtime." }
-New-Item -ItemType Directory -Force (Join-Path $PortableRuntime "Lib\site-packages") | Out-Null
-$PortableSitePackages = Join-Path $PortableRuntime "Lib\site-packages"
-Copy-Item -Path (Join-Path $DependencySitePackages "*") -Destination $PortableSitePackages -Recurse -Force
+if (-not $SkipRuntimeCopy) {
+    New-Item -ItemType Directory -Force (Join-Path $ReleaseRoot "work\GMFSS_Fortuna") | Out-Null
+    robocopy (Join-Path $Root "work\GMFSS_Fortuna") (Join-Path $ReleaseRoot "work\GMFSS_Fortuna") /E /XD ".git" "__pycache__" "temp" "vid_out" /XF "*.pyc" "*.pyo" | Out-Null
+    if ($LASTEXITCODE -gt 7) { throw "Failed to copy the GMFSS backend." }
+    New-Item -ItemType Directory -Force $PortableRuntime | Out-Null
+    robocopy $BasePython $PortableRuntime /E /XD "__pycache__" "site-packages" "venv" /XF "*.pyc" "*.pyo" | Out-Null
+    if ($LASTEXITCODE -gt 7) { throw "Failed to copy the standalone Python runtime." }
+    New-Item -ItemType Directory -Force (Join-Path $PortableRuntime "Lib\site-packages") | Out-Null
+    $PortableSitePackages = Join-Path $PortableRuntime "Lib\site-packages"
+    Copy-Item -Path (Join-Path $DependencySitePackages "*") -Destination $PortableSitePackages -Recurse -Force
+}
 $SitePackages = Join-Path $PortableRuntime "Lib\site-packages"
+if (-not $SkipRuntimePrune) {
 $PrunedRuntimePackages = @(
     "PyInstaller",
     "pyinstaller-*",
@@ -136,6 +152,7 @@ Get-ChildItem -Path $SitePackages -Recurse -Force -File -ErrorAction SilentlyCon
         $_.Extension -in @(".lib", ".h", ".hpp", ".pxd", ".pyx", ".whl")
     } |
     Remove-Item -Force
+}
 Copy-Item -Force (Join-Path $Root "anime_vfi.py") (Join-Path $ReleaseRoot "anime_vfi.py")
 Copy-Item -Force (Join-Path $Root "anime_vfi_gui.py") (Join-Path $ReleaseRoot "anime_vfi_gui.py")
 Copy-Item -Force (Join-Path $Root "offline_license.py") (Join-Path $ReleaseRoot "offline_license.py")

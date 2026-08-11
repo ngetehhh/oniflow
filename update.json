@@ -1,6 +1,6 @@
 {
-    "latest_version":  "0.9.11-beta",
-    "download_url":  "https://github.com/ngetehhh/oniflow/releases/download/v0.9.11-beta/Oniflow-Setup-0.9.11-beta.exe",
-    "sha256":  "3D06D77C5D22E29019CB30780EDE267294B529C8A577F9AAB07A42326133F9D3",
-    "release_notes":  "Fixes one-click patch updates. Turbo remains removed and GMFSS uses the stable optimized path."
+    "latest_version":  "0.9.12-beta",
+    "download_url":  "https://github.com/ngetehhh/oniflow/releases/download/v0.9.12-beta/Oniflow-Setup-0.9.12-beta.exe",
+    "sha256":  "42DBCDFC4273E841930E4C84153B0AC78AB54E0B0D934E9D620D00EAB4BC6032",
+    "release_notes":  "Repairs the bundled Python runtime and prevents patch updates from mixing Python versions."
 }

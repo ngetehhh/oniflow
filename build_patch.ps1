@@ -25,8 +25,9 @@ if (Test-Path $ZipPath) {
 New-Item -ItemType Directory -Force -Path $StageRoot | Out-Null
 
 $changed = 0
+$runtimeChanged = $false
 Get-ChildItem -LiteralPath $NewRoot -File -Recurse | ForEach-Object {
-    $relative = [System.IO.Path]::GetRelativePath($NewRoot.Path, $_.FullName)
+    $relative = $_.FullName.Substring($NewRoot.Path.Length).TrimStart([char[]]'\\')
     $oldFile = Join-Path $OldRoot.Path $relative
     $copy = $true
     if (Test-Path -LiteralPath $oldFile) {
@@ -35,11 +36,20 @@ Get-ChildItem -LiteralPath $NewRoot -File -Recurse | ForEach-Object {
         $copy = $oldHash -ne $newHash
     }
     if ($copy) {
+        if ($relative -like "work\python-runtime\*") {
+            $runtimeChanged = $true
+            return
+        }
         $target = Join-Path $StageRoot $relative
         New-Item -ItemType Directory -Force -Path (Split-Path $target -Parent) | Out-Null
         Copy-Item -LiteralPath $_.FullName -Destination $target -Force
         $changed += 1
     }
+}
+
+if ($runtimeChanged) {
+    Remove-Item -LiteralPath $StageRoot -Recurse -Force
+    throw "The bundled Python runtime changed. Publish the full installer for this version instead of a patch update."
 }
 
 if ($changed -eq 0) {
