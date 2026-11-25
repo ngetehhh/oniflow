@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -66,6 +67,10 @@ def run_command(
     cwd: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
     print(f"VFI_TASK {Path(command[0]).name}", flush=True)
+    # We decode child output as UTF-8, so child Python processes (the engine)
+    # must encode as UTF-8 too; otherwise Windows defaults to cp1252 and the
+    # engine crashes printing paths with characters such as "：".
+    env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
     if capture:
         return subprocess.run(
             command,
@@ -75,6 +80,7 @@ def run_command(
             errors="replace",
             capture_output=True,
             cwd=cwd,
+            env=env,
             creationflags=WINDOWS_CREATION_FLAGS,
         )
 
@@ -86,6 +92,7 @@ def run_command(
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         cwd=cwd,
+        env=env,
         creationflags=WINDOWS_CREATION_FLAGS,
     )
     output: list[str] = []
