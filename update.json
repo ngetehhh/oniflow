@@ -1,11 +1,11 @@
 {
-    "latest_version":  "0.9.13-beta",
-    "download_url":  "https://github.com/ngetehhh/oniflow/releases/download/v0.9.13-beta/Oniflow-Setup-0.9.13-beta.exe",
-    "sha256":  "8E3FA0EFB9B3577F175ACADC07EE094E936228A054DCCC07E0DCDD8C90DC6348",
-    "release_notes":  "Fixes interpolation failing immediately for videos whose file name or folder contains special characters such as the full-width colon or other Japanese/Korean characters.",
+    "latest_version":  "0.9.14-beta",
+    "download_url":  "https://github.com/ngetehhh/oniflow/releases/download/v0.9.14-beta/Oniflow-Setup-0.9.14-beta.exe",
+    "sha256":  "3A75C48F9DBC700B5950304DF0B886C59EB80372AE44CDFC1F0B8C85CB7CDDF0",
+    "release_notes":  "Fixes drag and drop not working after a patch update. Close and reopen Oniflow once after updating to this version.",
     "patch":  {
-                  "from_version":  "0.9.12-beta",
-                  "download_url":  "https://github.com/ngetehhh/oniflow/releases/download/v0.9.13-beta/Oniflow-Patch-0.9.12-beta-to-0.9.13-beta.zip",
-                  "sha256":  "6AF10C7620F20AABD568488FB611BB2350043642DCAAC9C469C4DA44CB91D36F"
+                  "from_version":  "0.9.13-beta",
+                  "download_url":  "https://github.com/ngetehhh/oniflow/releases/download/v0.9.14-beta/Oniflow-Patch-0.9.13-beta-to-0.9.14-beta.zip",
+                  "sha256":  "485D06364BF469E56480C30972E77220BD8620C7BB711F5CEB7FD891B5DEBAC5"
               }
 }
