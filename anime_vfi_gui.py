@@ -79,7 +79,7 @@ DEFAULT_SETTINGS = {
     "default_output_format": "MP4",
     "default_slow_motion": "Off",
 }
-APP_VERSION = "0.9.13-beta"
+APP_VERSION = "0.9.14-beta"
 UPDATE_REQUEST_HEADERS = {
     "Accept": "application/json, text/plain, */*",
     "User-Agent": f"Oniflow/{APP_VERSION}",
@@ -2312,7 +2312,9 @@ try {
     Start-Sleep -Seconds 2
     Expand-Archive -LiteralPath $zipPath -DestinationPath $appDir -Force
     "Patch applied from $zipPath" | Out-File -FilePath $LogPath -Encoding utf8 -Append
-    Start-Process -FilePath $exePath
+    # This script runs elevated; launching through Explorer restarts Oniflow
+    # as the normal user, otherwise Windows blocks drag and drop from Explorer.
+    & (Join-Path $env:WINDIR 'explorer.exe') $exePath
     "Oniflow restarted: $exePath" | Out-File -FilePath $LogPath -Encoding utf8 -Append
 } catch {
     New-Item -ItemType Directory -Force -Path $UpdateDir | Out-Null
