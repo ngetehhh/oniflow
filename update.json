@@ -1,6 +1,11 @@
 {
-    "latest_version":  "0.9.12-beta",
-    "download_url":  "https://github.com/ngetehhh/oniflow/releases/download/v0.9.12-beta/Oniflow-Setup-0.9.12-beta.exe",
-    "sha256":  "42DBCDFC4273E841930E4C84153B0AC78AB54E0B0D934E9D620D00EAB4BC6032",
-    "release_notes":  "Repairs the bundled Python runtime and prevents patch updates from mixing Python versions."
+    "latest_version":  "0.9.13-beta",
+    "download_url":  "https://github.com/ngetehhh/oniflow/releases/download/v0.9.13-beta/Oniflow-Setup-0.9.13-beta.exe",
+    "sha256":  "8E3FA0EFB9B3577F175ACADC07EE094E936228A054DCCC07E0DCDD8C90DC6348",
+    "release_notes":  "Fixes interpolation failing immediately for videos whose file name or folder contains special characters such as the full-width colon or other Japanese/Korean characters.",
+    "patch":  {
+                  "from_version":  "0.9.12-beta",
+                  "download_url":  "https://github.com/ngetehhh/oniflow/releases/download/v0.9.13-beta/Oniflow-Patch-0.9.12-beta-to-0.9.13-beta.zip",
+                  "sha256":  "6AF10C7620F20AABD568488FB611BB2350043642DCAAC9C469C4DA44CB91D36F"
+              }
 }
