@@ -63,18 +63,24 @@ def pick_intermediate_encoder():
 
 
 class PipeVideoWriter:
-    """cv2.VideoWriter-compatible writer that streams BGR frames into ffmpeg."""
+    """cv2.VideoWriter-compatible writer that streams BGR frames into ffmpeg.
+
+    4:2:0 video needs even dimensions, so an odd width or height loses its last
+    pixel column or row (as OpenCV's writer did); Oniflow's mux step expects it.
+    """
 
     def __init__(self, path, fps, width, height, encoder):
+        self.width = width - width % 2
+        self.height = height - height % 2
         command = [
             ffmpeg_command(), "-hide_banner", "-loglevel", "error", "-y",
-            "-f", "rawvideo", "-pix_fmt", "bgr24", "-s", f"{width}x{height}", "-r", f"{fps:.6f}",
+            "-f", "rawvideo", "-pix_fmt", "bgr24", "-s", f"{self.width}x{self.height}", "-r", f"{fps:.6f}",
             "-i", "-", "-an", *encoder, "-pix_fmt", "yuv420p", path,
         ]
         self.process = subprocess.Popen(command, stdin=subprocess.PIPE)
 
     def write(self, frame):
-        self.process.stdin.write(np.ascontiguousarray(frame).tobytes())
+        self.process.stdin.write(np.ascontiguousarray(frame[:self.height, :self.width]).tobytes())
 
     def release(self):
         try:
@@ -86,7 +92,7 @@ class PipeVideoWriter:
 
 
 def open_video_writer(path, fps, width, height, fourcc):
-    encoder = pick_intermediate_encoder() if width % 2 == 0 and height % 2 == 0 else None
+    encoder = pick_intermediate_encoder()
     if encoder is None:
         print("VFI_NOTICE ffmpeg intermediate encoder unavailable; using OpenCV mp4v", flush=True)
         return cv2.VideoWriter(path, fourcc, fps, (width, height))
@@ -443,9 +449,9 @@ def process_video(user_args):
     if args.montage:
         write_buffer.put(np.concatenate((lastframe, lastframe), 1))
     else:
+        # End on the last real frame. Repeating it (multi - 1) more times only
+        # padded the duration with frozen frames at the end of every clip.
         write_buffer.put(lastframe)
-        for _ in range(args.multi - 1):
-            write_buffer.put(lastframe)
     write_buffer.put(None)
     writer_thread.join()
     pbar.close()

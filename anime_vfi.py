@@ -188,6 +188,26 @@ def probe_video(path: Path) -> VideoInfo:
     )
 
 
+def video_size(info: VideoInfo) -> tuple[int, int]:
+    """Output size for a source: 4:2:0 video needs even dimensions, so an odd
+    width or height drops its last pixel column or row."""
+    return info.width - info.width % 2, info.height - info.height % 2
+
+
+def check_engine_resolution(silent_info: VideoInfo, info: VideoInfo) -> None:
+    if (silent_info.width, silent_info.height) != video_size(info):
+        raise PipelineError(
+            "Engine menghasilkan resolusi yang berbeda dari input: "
+            f"{silent_info.width}x{silent_info.height} != {info.width}x{info.height}"
+        )
+    if video_size(info) != (info.width, info.height):
+        print(
+            f"VFI_NOTICE odd resolution {info.width}x{info.height}; output is "
+            f"{silent_info.width}x{silent_info.height} (video needs even dimensions)",
+            flush=True,
+        )
+
+
 def detect_scenes(path: Path, threshold: float) -> list[float]:
     ffmpeg = require_tool("ffmpeg")
     result = subprocess.run(
@@ -433,8 +453,9 @@ def mux_final(
         if encoder.get("bufsize"):
             command.extend(["-bufsize", str(encoder["bufsize"])])
     video_filters: list[str] = []
-    if (silent_info.width, silent_info.height) != (source_info.width, source_info.height):
-        video_filters.append(f"scale={source_info.width}:{source_info.height}:flags=lanczos")
+    target_width, target_height = video_size(source_info)
+    if (silent_info.width, silent_info.height) != (target_width, target_height):
+        video_filters.append(f"scale={target_width}:{target_height}:flags=lanczos")
     if slow_motion:
         output_fps = source_info.fps
         video_filters.append(f"setpts={slow_motion_factor}*PTS")
@@ -459,7 +480,10 @@ def mux_final(
         if preserve_subtitles and not slow_motion:
             command.extend(["-map", "1:s?", "-c:s", "copy"])
         command.extend(["-c:a", "copy" if audio.get("copy_for_mkv", True) else "aac"])
-    command.extend(["-shortest", str(output)])
+    # Keep every interpolated frame: end at the video's length rather than at
+    # the shortest stream, which cut the video when the audio was shorter.
+    video_duration = silent_info.frame_count / silent_info.fps * max(slow_motion_factor, 1)
+    command.extend(["-t", f"{video_duration:.6f}", str(output)])
 
     def replace_option(arguments: list[str], option: str, value: str) -> list[str]:
         updated = list(arguments)
@@ -509,7 +533,7 @@ def mux_final(
                 continue
             raise
     output_info = probe_video(output)
-    if (output_info.width, output_info.height) != (source_info.width, source_info.height):
+    if (output_info.width, output_info.height) != video_size(source_info):
         output.unlink(missing_ok=True)
         raise PipelineError(
             "Resolusi output tidak cocok dengan input: "
@@ -634,12 +658,7 @@ def interpolate_gmfss(
             run_command(fallback_command, cwd=cwd)
     if not silent_video.exists():
         raise PipelineError(f"GMFSS tidak membuat output yang diharapkan: {silent_video}")
-    silent_info = probe_video(silent_video)
-    if (silent_info.width, silent_info.height) != (info.width, info.height):
-        raise PipelineError(
-            "Engine menghasilkan resolusi yang berbeda dari input: "
-            f"{silent_info.width}x{silent_info.height} != {info.width}x{info.height}"
-        )
+    check_engine_resolution(probe_video(silent_video), info)
     mux_final(silent_video, input_path, output_path, config, slow_motion_factor, info)
     if keep_temp:
         print(f"File sementara dipertahankan: {temp_dir}")
@@ -750,12 +769,7 @@ def interpolate_gmfss_batch(
         for input_path, output_path, silent_video, info in prepared:
             if not silent_video.exists():
                 raise PipelineError(f"GMFSS tidak membuat output yang diharapkan: {silent_video}")
-            silent_info = probe_video(silent_video)
-            if (silent_info.width, silent_info.height) != (info.width, info.height):
-                raise PipelineError(
-                    "Engine menghasilkan resolusi yang berbeda dari input: "
-                    f"{silent_info.width}x{silent_info.height} != {info.width}x{info.height}"
-                )
+            check_engine_resolution(probe_video(silent_video), info)
             mux_final(silent_video, input_path, output_path, config, slow_motion_factor, info)
         if keep_temp:
             print(f"File sementara batch dipertahankan: {batch_temp}")

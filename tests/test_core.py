@@ -125,12 +125,26 @@ class CoreTests(unittest.TestCase):
     def test_atempo_filter_supports_ten_times_slow_motion(self):
         self.assertEqual(MODULE.atempo_filter(0.1), "atempo=0.5,atempo=0.5,atempo=0.5,atempo=0.8")
 
-    def test_slow_motion_preserves_legacy_final_frame_hold(self):
-        pipeline = (ROOT / "anime_vfi.py").read_text(encoding="utf-8")
+    def test_clip_ends_on_last_real_frame(self):
         engine = (ROOT / "work" / "GMFSS_Fortuna" / "inference_video.py").read_text(encoding="utf-8")
-        self.assertNotIn("trim=end_frame", pipeline)
-        self.assertNotIn("--no-final-hold", engine)
-        self.assertIn("for _ in range(args.multi - 1):", engine)
+        override = (ROOT / "patches" / "GMFSS_Fortuna" / "inference_video.py").read_text(encoding="utf-8")
+        for source in (engine, override):
+            self.assertNotIn("for _ in range(args.multi - 1):", source)
+
+    def test_mux_keeps_video_length_when_audio_is_shorter(self):
+        pipeline = (ROOT / "anime_vfi.py").read_text(encoding="utf-8")
+        self.assertNotIn('"-shortest"', pipeline)
+        self.assertIn('"-t", f"{video_duration:.6f}"', pipeline)
+
+    def test_odd_resolution_rounds_down_to_even(self):
+        def info(width, height):
+            return MODULE.VideoInfo(width, height, 30.0, 1.0, 30, "h264", "yuv444p", False, False)
+
+        self.assertEqual(MODULE.video_size(info(853, 481)), (852, 480))
+        self.assertEqual(MODULE.video_size(info(1920, 1080)), (1920, 1080))
+        MODULE.check_engine_resolution(info(852, 480), info(853, 481))
+        with self.assertRaises(MODULE.PipelineError):
+            MODULE.check_engine_resolution(info(853, 481), info(853, 481))
 
 
 
