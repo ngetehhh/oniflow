@@ -1,11 +1,11 @@
 {
-    "latest_version":  "0.9.14-beta",
-    "download_url":  "https://github.com/ngetehhh/oniflow/releases/download/v0.9.14-beta/Oniflow-Setup-0.9.14-beta.exe",
-    "sha256":  "3A75C48F9DBC700B5950304DF0B886C59EB80372AE44CDFC1F0B8C85CB7CDDF0",
-    "release_notes":  "Fixes drag and drop not working after a patch update. Close and reopen Oniflow once after updating to this version.",
+    "latest_version":  "0.9.15-beta",
+    "download_url":  "https://github.com/ngetehhh/oniflow/releases/download/v0.9.15-beta/Oniflow-Setup-0.9.15-beta.exe",
+    "sha256":  "2A36E9DA0E5693B6C8B19D142D007D0A9DD34C60D79ACDDFB7577C5ABA651C92",
+    "release_notes":  "About 1.5x faster interpolation, sharper output (no more lossy mp4v intermediate), and a fix for batch jobs losing their last frames.",
     "patch":  {
-                  "from_version":  "0.9.13-beta",
-                  "download_url":  "https://github.com/ngetehhh/oniflow/releases/download/v0.9.14-beta/Oniflow-Patch-0.9.13-beta-to-0.9.14-beta.zip",
-                  "sha256":  "485D06364BF469E56480C30972E77220BD8620C7BB711F5CEB7FD891B5DEBAC5"
+                  "from_version":  "0.9.14-beta",
+                  "download_url":  "https://github.com/ngetehhh/oniflow/releases/download/v0.9.15-beta/Oniflow-Patch-0.9.14-beta-to-0.9.15-beta.zip",
+                  "sha256":  "736DA298FFCC7C9F61716F36C027CCE138D0AC8E34C833E89FB9084960976AD7"
               }
 }
