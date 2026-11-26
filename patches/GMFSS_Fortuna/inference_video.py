@@ -17,6 +17,7 @@ from tqdm import tqdm
 from torch.nn import functional as F
 import warnings
 import _thread
+import threading
 import skvideo
 
 
@@ -29,6 +30,67 @@ if FFMPEG_EXE.is_file() and FFPROBE_EXE.is_file():
     skvideo.setFFmpegPath(str(TOOLS_DIR))
 
 import skvideo.io
+
+# The intermediate is re-encoded by Oniflow's mux step, so it must be close to
+# lossless: OpenCV's mp4v writer cost about 2.5 VMAF points in the final file.
+# Measured at 1080p 8x: HEVC NVENC qp 8 gives final VMAF 97.9 vs 95.5 for mp4v.
+INTERMEDIATE_ENCODERS = (
+    ["-c:v", "hevc_nvenc", "-preset", "p1", "-rc", "constqp", "-qp", "8"],
+    ["-c:v", "libx264", "-preset", "ultrafast", "-crf", "6"],
+)
+_intermediate_encoder = None
+
+
+def ffmpeg_command():
+    return str(FFMPEG_EXE) if FFMPEG_EXE.is_file() else "ffmpeg"
+
+
+def pick_intermediate_encoder():
+    """First encoder from INTERMEDIATE_ENCODERS that works here, else None."""
+    global _intermediate_encoder
+    if _intermediate_encoder is None:
+        _intermediate_encoder = []
+        for encoder in INTERMEDIATE_ENCODERS:
+            probe = [ffmpeg_command(), "-v", "error", "-f", "lavfi", "-i", "color=black:s=256x256:d=0.1",
+                     *encoder, "-pix_fmt", "yuv420p", "-f", "null", "-"]
+            try:
+                if subprocess.run(probe, capture_output=True, timeout=60).returncode == 0:
+                    _intermediate_encoder = encoder
+                    break
+            except (OSError, subprocess.TimeoutExpired):
+                break
+    return _intermediate_encoder or None
+
+
+class PipeVideoWriter:
+    """cv2.VideoWriter-compatible writer that streams BGR frames into ffmpeg."""
+
+    def __init__(self, path, fps, width, height, encoder):
+        command = [
+            ffmpeg_command(), "-hide_banner", "-loglevel", "error", "-y",
+            "-f", "rawvideo", "-pix_fmt", "bgr24", "-s", f"{width}x{height}", "-r", f"{fps:.6f}",
+            "-i", "-", "-an", *encoder, "-pix_fmt", "yuv420p", path,
+        ]
+        self.process = subprocess.Popen(command, stdin=subprocess.PIPE)
+
+    def write(self, frame):
+        self.process.stdin.write(np.ascontiguousarray(frame).tobytes())
+
+    def release(self):
+        try:
+            self.process.stdin.close()
+        except OSError:
+            pass
+        if self.process.wait() != 0:
+            raise RuntimeError(f"ffmpeg failed to write the intermediate video (exit {self.process.returncode})")
+
+
+def open_video_writer(path, fps, width, height, fourcc):
+    encoder = pick_intermediate_encoder() if width % 2 == 0 and height % 2 == 0 else None
+    if encoder is None:
+        print("VFI_NOTICE ffmpeg intermediate encoder unavailable; using OpenCV mp4v", flush=True)
+        return cv2.VideoWriter(path, fourcc, fps, (width, height))
+    return PipeVideoWriter(path, fps, width, height, encoder)
 from contextlib import nullcontext
 from fractions import Fraction
 from math import gcd
@@ -168,17 +230,22 @@ print("Loaded model")
 model.eval()
 model.device()
 
-def clear_write_buffer(user_args, write_buffer):
+def clear_write_buffer(user_args, write_buffer, errors):
     cnt = 0
     while True:
         item = write_buffer.get()
         if item is None:
             break
-        if user_args.png:
-            cv2.imwrite('vid_out/{:0>7d}.png'.format(cnt), item[:, :, ::-1])
-            cnt += 1
-        else:
-            vid_out.write(item[:, :, ::-1])
+        if errors:
+            continue  # keep draining so the producer never blocks on a full queue
+        try:
+            if user_args.png:
+                cv2.imwrite('vid_out/{:0>7d}.png'.format(cnt), item[:, :, ::-1])
+                cnt += 1
+            else:
+                vid_out.write(item[:, :, ::-1])
+        except Exception as exc:
+            errors.append(exc)
 
 def build_read_buffer(user_args, read_buffer, videogen):
     try:
@@ -299,7 +366,7 @@ def process_video(user_args):
             vid_out_name = args.output
         else:
             vid_out_name = '{}_{}X_{}fps.{}'.format(video_path_wo_ext, args.multi, int(np.round(args.fps)), args.ext)
-        vid_out = cv2.VideoWriter(vid_out_name, fourcc, args.fps, (w, h))
+        vid_out = open_video_writer(vid_out_name, args.fps, w, h, fourcc)
 
     if args.montage:
         left = w // 4
@@ -316,7 +383,11 @@ def process_video(user_args):
     write_buffer = Queue(maxsize=500)
     read_buffer = Queue(maxsize=500)
     _thread.start_new_thread(build_read_buffer, (args, read_buffer, videogen))
-    _thread.start_new_thread(clear_write_buffer, (args, write_buffer))
+    # A joinable writer thread: the video must not be released while the
+    # writer is still encoding the last frame (lost frames / cv2.error).
+    writer_errors = []
+    writer_thread = threading.Thread(target=clear_write_buffer, args=(args, write_buffer, writer_errors), daemon=True)
+    writer_thread.start()
 
     I1 = torch.from_numpy(np.transpose(lastframe, (2,0,1))).to(device, non_blocking=True).unsqueeze(0)
     I1 = I1.half() if args.fp16 else I1.float()
@@ -375,11 +446,13 @@ def process_video(user_args):
         write_buffer.put(lastframe)
         for _ in range(args.multi - 1):
             write_buffer.put(lastframe)
-    while(not write_buffer.empty()):
-        time.sleep(0.1)
+    write_buffer.put(None)
+    writer_thread.join()
     pbar.close()
     if not vid_out is None:
         vid_out.release()
+    if writer_errors:
+        raise RuntimeError('Writing interpolated frames failed: {}'.format(writer_errors[0]))
 
     if args.png == False and fpsNotAssigned == True and not args.video is None:
         try:

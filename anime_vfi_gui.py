@@ -79,7 +79,7 @@ DEFAULT_SETTINGS = {
     "default_output_format": "MP4",
     "default_slow_motion": "Off",
 }
-APP_VERSION = "0.9.14-beta"
+APP_VERSION = "0.9.15-beta"
 UPDATE_REQUEST_HEADERS = {
     "Accept": "application/json, text/plain, */*",
     "User-Agent": f"Oniflow/{APP_VERSION}",
@@ -2385,8 +2385,12 @@ try {
         multiplier = int(self.multiplier.get().removesuffix("x"))
         for item in self.items:
             info = probe_video(item.path)
-            total_frames += info.frame_count * multiplier
-            total_bytes += item.path.stat().st_size * multiplier
+            output_frames = info.frame_count * multiplier
+            total_frames += output_frames
+            # Near-lossless HEVC intermediate measured at ~0.055 bytes/pixel per
+            # frame; budget 0.12 to cover detailed footage and the final file.
+            working_bytes = output_frames * info.width * info.height * 0.12
+            total_bytes += max(item.path.stat().st_size * multiplier, working_bytes)
         estimated_gb = total_bytes / 1024**3
         free_gb = shutil.disk_usage(self.output_dir.get()).free / 1024**3
         self._log(
