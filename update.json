@@ -1,11 +1,11 @@
 {
-    "latest_version":  "0.9.16-beta",
-    "download_url":  "https://github.com/ngetehhh/oniflow/releases/download/v0.9.16-beta/Oniflow-Setup-0.9.16-beta.exe",
-    "sha256":  "0E1D0CE3AE9C20ED61EEBF8042F20BAE1EEA50FEF3B82BC39BF58D8A24465DC2",
-    "release_notes":  "Clips no longer end with frozen frames, a shorter audio track no longer cuts the video, and odd-sized videos are supported.",
+    "latest_version":  "0.9.17-beta",
+    "download_url":  "https://github.com/ngetehhh/oniflow/releases/download/v0.9.17-beta/Oniflow-Setup-0.9.17-beta.exe",
+    "sha256":  "1C0752725FF185CC2502148C4D406294F067A46578A29ADFCFB187718390D6D2",
+    "release_notes":  "Exact frame rates for 23.976, 29.97 and 59.94 fps videos, so editors such as After Effects show every frame, including the last one.",
     "patch":  {
-                  "from_version":  "0.9.15-beta",
-                  "download_url":  "https://github.com/ngetehhh/oniflow/releases/download/v0.9.16-beta/Oniflow-Patch-0.9.15-beta-to-0.9.16-beta.zip",
-                  "sha256":  "DB6221EDDC0254E2E04C2736E340ACAF39C0B47B0A88A3D832D5F7618535D8D2"
+                  "from_version":  "0.9.16-beta",
+                  "download_url":  "https://github.com/ngetehhh/oniflow/releases/download/v0.9.17-beta/Oniflow-Patch-0.9.16-beta-to-0.9.17-beta.zip",
+                  "sha256":  "DDCF3E0CA7DA523959CC35FEC79918497734C46559628F72AA1949D2F20B8930"
               }
 }
