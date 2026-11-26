@@ -1,11 +1,11 @@
 {
-    "latest_version":  "0.9.15-beta",
-    "download_url":  "https://github.com/ngetehhh/oniflow/releases/download/v0.9.15-beta/Oniflow-Setup-0.9.15-beta.exe",
-    "sha256":  "2A36E9DA0E5693B6C8B19D142D007D0A9DD34C60D79ACDDFB7577C5ABA651C92",
-    "release_notes":  "About 1.5x faster interpolation, sharper output (no more lossy mp4v intermediate), and a fix for batch jobs losing their last frames.",
+    "latest_version":  "0.9.16-beta",
+    "download_url":  "https://github.com/ngetehhh/oniflow/releases/download/v0.9.16-beta/Oniflow-Setup-0.9.16-beta.exe",
+    "sha256":  "0E1D0CE3AE9C20ED61EEBF8042F20BAE1EEA50FEF3B82BC39BF58D8A24465DC2",
+    "release_notes":  "Clips no longer end with frozen frames, a shorter audio track no longer cuts the video, and odd-sized videos are supported.",
     "patch":  {
-                  "from_version":  "0.9.14-beta",
-                  "download_url":  "https://github.com/ngetehhh/oniflow/releases/download/v0.9.15-beta/Oniflow-Patch-0.9.14-beta-to-0.9.15-beta.zip",
-                  "sha256":  "736DA298FFCC7C9F61716F36C027CCE138D0AC8E34C833E89FB9084960976AD7"
+                  "from_version":  "0.9.15-beta",
+                  "download_url":  "https://github.com/ngetehhh/oniflow/releases/download/v0.9.16-beta/Oniflow-Patch-0.9.15-beta-to-0.9.16-beta.zip",
+                  "sha256":  "DB6221EDDC0254E2E04C2736E340ACAF39C0B47B0A88A3D832D5F7618535D8D2"
               }
 }
