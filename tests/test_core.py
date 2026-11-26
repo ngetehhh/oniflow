@@ -136,6 +136,15 @@ class CoreTests(unittest.TestCase):
         self.assertNotIn('"-shortest"', pipeline)
         self.assertIn('"-t", f"{video_duration:.6f}"', pipeline)
 
+    def test_ntsc_rates_are_written_as_exact_fractions(self):
+        self.assertEqual(MODULE.exact_rate(24000 / 1001 * 8), "192000/1001")
+        self.assertEqual(MODULE.exact_rate(191.808192), "192000/1001")
+        self.assertEqual(MODULE.exact_rate(59.94005994), "60000/1001")
+        self.assertEqual(MODULE.exact_rate(60.0), "60/1")
+        self.assertEqual(MODULE.exact_rate(12.5), "25/2")
+        engine = (ROOT / "work" / "GMFSS_Fortuna" / "inference_video.py").read_text(encoding="utf-8")
+        self.assertIn('"-r", exact_rate(fps)', engine)
+
     def test_odd_resolution_rounds_down_to_even(self):
         def info(width, height):
             return MODULE.VideoInfo(width, height, 30.0, 1.0, 30, "h264", "yuv444p", False, False)

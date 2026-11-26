@@ -62,6 +62,21 @@ def pick_intermediate_encoder():
     return _intermediate_encoder or None
 
 
+def exact_rate(fps):
+    """ffmpeg rate for fps: exact NTSC fraction (e.g. 192000/1001) when fps is one.
+
+    --fps arrives rounded to 6 decimals; passing that on made ffmpeg store an
+    approximation (871001/4541 instead of 192000/1001), and editors such as
+    After Effects then showed the previous frame and never the last one.
+    """
+    for denominator in (1, 1001):
+        numerator = round(fps * denominator)
+        if abs(numerator / denominator - fps) < 1e-4:
+            return f"{numerator}/{denominator}"
+    rate = Fraction(fps).limit_denominator(1000000)
+    return f"{rate.numerator}/{rate.denominator}"
+
+
 class PipeVideoWriter:
     """cv2.VideoWriter-compatible writer that streams BGR frames into ffmpeg.
 
@@ -74,7 +89,7 @@ class PipeVideoWriter:
         self.height = height - height % 2
         command = [
             ffmpeg_command(), "-hide_banner", "-loglevel", "error", "-y",
-            "-f", "rawvideo", "-pix_fmt", "bgr24", "-s", f"{self.width}x{self.height}", "-r", f"{fps:.6f}",
+            "-f", "rawvideo", "-pix_fmt", "bgr24", "-s", f"{self.width}x{self.height}", "-r", exact_rate(fps),
             "-i", "-", "-an", *encoder, "-pix_fmt", "yuv420p", path,
         ]
         self.process = subprocess.Popen(command, stdin=subprocess.PIPE)

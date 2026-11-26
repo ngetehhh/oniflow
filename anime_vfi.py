@@ -188,6 +188,17 @@ def probe_video(path: Path) -> VideoInfo:
     )
 
 
+def exact_rate(fps: float) -> str:
+    """ffmpeg rate for fps: the exact NTSC fraction (24000/1001) when fps is one,
+    so editors place every frame on its own frame boundary."""
+    for denominator in (1, 1001):
+        numerator = round(fps * denominator)
+        if abs(numerator / denominator - fps) < 1e-4:
+            return f"{numerator}/{denominator}"
+    rate = Fraction(fps).limit_denominator(1000000)
+    return f"{rate.numerator}/{rate.denominator}"
+
+
 def video_size(info: VideoInfo) -> tuple[int, int]:
     """Output size for a source: 4:2:0 video needs even dimensions, so an odd
     width or height drops its last pixel column or row."""
@@ -459,7 +470,7 @@ def mux_final(
     if slow_motion:
         output_fps = source_info.fps
         video_filters.append(f"setpts={slow_motion_factor}*PTS")
-        command.extend(["-r", f"{output_fps:.8f}"])
+        command.extend(["-r", exact_rate(output_fps)])
     if video_filters:
         command.extend(["-filter:v", ",".join(video_filters)])
     if not mute_audio and source_available:
