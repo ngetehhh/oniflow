@@ -1,11 +1,11 @@
 {
-    "latest_version":  "0.9.17-beta",
-    "download_url":  "https://github.com/ngetehhh/oniflow/releases/download/v0.9.17-beta/Oniflow-Setup-0.9.17-beta.exe",
-    "sha256":  "1C0752725FF185CC2502148C4D406294F067A46578A29ADFCFB187718390D6D2",
-    "release_notes":  "Exact frame rates for 23.976, 29.97 and 59.94 fps videos, so editors such as After Effects show every frame, including the last one.",
-    "patch":  {
-                  "from_version":  "0.9.16-beta",
-                  "download_url":  "https://github.com/ngetehhh/oniflow/releases/download/v0.9.17-beta/Oniflow-Patch-0.9.16-beta-to-0.9.17-beta.zip",
-                  "sha256":  "DDCF3E0CA7DA523959CC35FEC79918497734C46559628F72AA1949D2F20B8930"
-              }
+    "latest_version": "0.9.18-beta",
+    "download_url": "https://github.com/ngetehhh/oniflow/releases/download/v0.9.18-beta/Oniflow-Setup-0.9.18-beta.exe",
+    "sha256": "10C3A4B39132E369F2F4AF3D71F0F0FF4D8A870A9BCBBE7DA92CD7F52EFC6499",
+    "release_notes": "Custom frame rate: pick 2x-10x or type any output FPS such as 60 or 59.94. Smarter scene-cut protection that follows the motion, so fast action is no longer frozen.",
+    "patch": {
+        "from_version": "0.9.17-beta",
+        "download_url": "https://github.com/ngetehhh/oniflow/releases/download/v0.9.18-beta/Oniflow-Patch-0.9.17-beta-to-0.9.18-beta.zip",
+        "sha256": "49B3085AE37498242322BE1951848DC348D4EE7B27379CC42E859D5E501E03F5"
+    }
 }
