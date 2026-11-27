@@ -205,6 +205,21 @@ class ProductTests(unittest.TestCase):
                 saved = json.loads(settings_path.read_text(encoding="utf-8"))
         self.assertFalse(saved["mixed_precision"])
 
+    def test_old_scene_threshold_and_frame_rate_settings_are_migrated(self):
+        with tempfile.TemporaryDirectory() as directory:
+            settings_path = Path(directory) / "user_settings.json"
+            settings_path.write_text(
+                json.dumps({"scene_threshold": 0.32, "default_multiplier": "60 fps"}), encoding="utf-8"
+            )
+            with patch.object(anime_vfi_gui, "SETTINGS_PATH", settings_path):
+                settings = anime_vfi_gui.AnimeVfiPro._load_settings()
+            settings_path.write_text(json.dumps({"scene_threshold": 0.2}), encoding="utf-8")
+            with patch.object(anime_vfi_gui, "SETTINGS_PATH", settings_path):
+                custom = anime_vfi_gui.AnimeVfiPro._load_settings()
+        self.assertEqual(settings["scene_threshold"], 0.12)
+        self.assertEqual(settings["default_multiplier"], "2x")
+        self.assertEqual(custom["scene_threshold"], 0.2)
+
     def test_runtime_config_is_written_to_user_data(self):
         with tempfile.TemporaryDirectory() as directory:
             app_data = Path(directory) / "Oniflow"
@@ -415,6 +430,30 @@ class ProductTests(unittest.TestCase):
         source = inspect.getsource(anime_vfi_gui.AnimeVfiPro._startup_device_check)
         self.assertIn('ROOT / "tools" / "ffmpeg.exe"', source)
         self.assertIn("[ffmpeg, \"-hide_banner\", \"-encoders\"]", source)
+
+    def test_fixed_frame_rate_choice(self):
+        self.assertEqual(anime_vfi_gui.frame_rate_target("60 fps", 23.976), 60.0)
+        self.assertEqual(anime_vfi_gui.frame_rate_target("4x", 24.0), 96.0)
+        self.assertEqual(anime_vfi_gui.frame_rate_arguments("60 fps"), ["--fps", "60"])
+        self.assertEqual(anime_vfi_gui.frame_rate_arguments("4x"), ["--multiplier", "4"])
+        self.assertEqual(
+            anime_vfi_gui.build_output_filename("clip", "mp4", 23.976, "60 fps"),
+            "clip_oniflow-60fps.mp4",
+        )
+        self.assertEqual(
+            anime_vfi_gui.build_output_filename("clip", "mp4", 23.976, "120 fps", 2),
+            "clip_oniflow-60fps(slowmo).mp4",
+        )
+        self.assertEqual(anime_vfi_gui.FRAME_RATE_CHOICES, ["2x", "4x", "6x", "8x", "10x"])
+
+    def test_custom_frame_rate_box(self):
+        self.assertEqual(anime_vfi_gui.custom_frame_rate_choice("60"), "60 fps")
+        self.assertEqual(anime_vfi_gui.custom_frame_rate_choice(" 59,94 "), "59.94 fps")
+        self.assertEqual(anime_vfi_gui.frame_rate_arguments("59.94 fps"), ["--fps", "59.94"])
+        for bad in ("", "abc", "0", "1", "5000"):
+            with self.assertRaises(ValueError):
+                anime_vfi_gui.custom_frame_rate_choice(bad)
+        self.assertNotIn(anime_vfi_gui.CUSTOM_FRAME_RATE, anime_vfi_gui.FRAME_RATE_CHOICES)
 
     def test_output_filename_contains_brand_multiplier_and_result_fps(self):
         self.assertEqual(

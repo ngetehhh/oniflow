@@ -49,6 +49,11 @@ VIDEO_EXTENSIONS = {".avi", ".m2ts", ".m4v", ".mkv", ".mov", ".mp4", ".ts", ".we
 PROGRESS_RE = re.compile(r"VFI_PROGRESS\s+(\d+)\s+(\d+)")
 PATCH_ASSET_RE = re.compile(r"^Oniflow-Patch-(?P<from>.+)-to-(?P<to>.+)\.zip$", re.IGNORECASE)
 OUTPUT_FORMATS = ["MP4", "MKV", "MOV", "MOV with Alpha"]
+# Multipliers of the source frame rate; "Custom" asks for an exact output FPS.
+FRAME_RATE_CHOICES = ["2x", "4x", "6x", "8x", "10x"]
+CUSTOM_FRAME_RATE = "Custom"
+LEGACY_SCENE_THRESHOLD = 0.32
+MAX_CUSTOM_FPS = 1000.0
 DEFAULT_SETTINGS = {
     "video_codec": "AV1",
     "quality_value": "Balanced (CQ 18)",
@@ -58,7 +63,7 @@ DEFAULT_SETTINGS = {
     "preserve_subtitles": True,
     "scene_protection": True,
     "held_frame_protection": True,
-    "scene_threshold": 0.32,
+    "scene_threshold": 0.12,
     "static_threshold": 0.002,
     "temp_dir": "",
     "delete_cache": True,
@@ -79,7 +84,7 @@ DEFAULT_SETTINGS = {
     "default_output_format": "MP4",
     "default_slow_motion": "Off",
 }
-APP_VERSION = "0.9.17-beta"
+APP_VERSION = "0.9.18-beta"
 UPDATE_REQUEST_HEADERS = {
     "Accept": "application/json, text/plain, */*",
     "User-Agent": f"Oniflow/{APP_VERSION}",
@@ -339,16 +344,42 @@ def output_extension(output_format: str) -> str:
     return output_format.lower()
 
 
+def frame_rate_target(choice: str, input_fps: float) -> float:
+    """Output FPS for a Frame Rate choice such as "4x" or "60 fps"."""
+    if choice.endswith("fps"):
+        return float(choice.removesuffix("fps"))
+    return input_fps * int(choice.removesuffix("x"))
+
+
+def custom_frame_rate_choice(text: str) -> str:
+    """Turn the Custom FPS box into a choice such as "59.94 fps"."""
+    try:
+        fps = float(text.strip().replace(",", "."))
+    except ValueError:
+        raise ValueError("Enter the custom frame rate as a number, for example 60 or 59.94.") from None
+    if not 1 < fps <= MAX_CUSTOM_FPS:
+        raise ValueError(f"Custom frame rate must be between 1 and {MAX_CUSTOM_FPS:g} fps.")
+    return f"{format_output_fps(fps)} fps"
+
+
+def frame_rate_arguments(choice: str) -> list[str]:
+    if choice.endswith("fps"):
+        return ["--fps", choice.removesuffix("fps").strip()]
+    return ["--multiplier", choice.removesuffix("x")]
+
+
 def build_output_filename(
     stem: str,
     extension: str,
     input_fps: float,
-    multiplier: int,
+    frame_rate: int | str,
     slow_motion_factor: int = 1,
 ) -> str:
-    output_fps = input_fps * multiplier / slow_motion_factor
+    choice = f"{frame_rate}x" if isinstance(frame_rate, int) else frame_rate
+    output_fps = frame_rate_target(choice, input_fps) / slow_motion_factor
+    multiplier_label = f"_{choice}" if choice.endswith("x") else ""
     slow_motion_suffix = "(slowmo)" if slow_motion_factor != 1 else ""
-    return f"{stem}_oniflow_{multiplier}x-{format_output_fps(output_fps)}fps{slow_motion_suffix}.{extension}"
+    return f"{stem}_oniflow{multiplier_label}-{format_output_fps(output_fps)}fps{slow_motion_suffix}.{extension}"
 
 
 class CTkDnD(ctk.CTk, TkinterDnD.DnDWrapper):
@@ -398,6 +429,7 @@ class AnimeVfiPro:
         self.mode = ctk.StringVar(value=str(self.settings["default_profile"]))
         self.model_name = ctk.StringVar(value=default_backend_label)
         self.multiplier = ctk.StringVar(value=str(self.settings["default_multiplier"]))
+        self.custom_fps = ctk.StringVar(value="60")
         self.output_dir = ctk.StringVar(value="")
         self.quality = ctk.StringVar(value=str(self.settings["default_interpolation_quality"]))
         self.slow_motion = ctk.StringVar(value=str(self.settings["default_slow_motion"]))
@@ -826,13 +858,28 @@ class AnimeVfiPro:
         quality_field = ctk.CTkFrame(interpolation_row, fg_color="transparent")
         quality_field.grid(row=0, column=1, sticky="ew")
         self._field(
-            multiplier_field, "FPS Multiplier", variable=self.multiplier,
-            options=["2x", "4x", "6x", "8x", "10x"], compact=True,
+            multiplier_field, "Frame Rate", variable=self.multiplier,
+            options=[*FRAME_RATE_CHOICES, CUSTOM_FRAME_RATE], compact=True,
         )
         self._field(
             quality_field, "Interpolation Quality", variable=self.quality,
             options=["Fast", "Normal", "Quality"], compact=True,
         )
+        # Shown only while Frame Rate is set to Custom.
+        self.custom_fps_field = ctk.CTkFrame(interpolation_row, fg_color="transparent")
+        ctk.CTkLabel(
+            self.custom_fps_field, text="CUSTOM FPS", font=("Segoe UI", 11, "bold"), text_color="#64748b"
+        ).pack(anchor="w", padx=8, pady=(4, 2))
+        ctk.CTkEntry(
+            self.custom_fps_field,
+            textvariable=self.custom_fps,
+            fg_color="#162238",
+            border_color="#263552",
+            text_color="#e2e8f0",
+            height=28,
+        ).pack(fill="x", padx=8)
+        self.multiplier.trace_add("write", self._frame_rate_mode_changed)
+        self._frame_rate_mode_changed()
 
         output_card = ctk.CTkFrame(parent, fg_color="#111a2e", corner_radius=9)
         output_card.pack(fill="x", padx=12, pady=(0, 6))
@@ -975,7 +1022,7 @@ class AnimeVfiPro:
 
         option("Job Defaults", "default_profile", "Default Profile", ["Anime", "Human"])
         option("Job Defaults", "default_backend", "Default Model", list(self.backend_labels.values()))
-        option("Job Defaults", "default_multiplier", "Default FPS Multiplier", ["2x", "4x", "6x", "8x", "10x"])
+        option("Job Defaults", "default_multiplier", "Default Frame Rate", FRAME_RATE_CHOICES)
         option(
             "Job Defaults",
             "default_interpolation_quality",
@@ -1044,6 +1091,7 @@ class AnimeVfiPro:
             "Interpolation",
             "Protection guide",
             "Keep Scene-Change Protection enabled to prevent mixed frames between cuts. "
+            "Cuts are found by following the motion between frames, so fast action is not mistaken for a cut. "
             "Keep Held-Frame Protection enabled for anime and static shots. "
             "Only adjust thresholds when default protection incorrectly skips real motion.",
         )
@@ -1051,12 +1099,13 @@ class AnimeVfiPro:
             "Interpolation",
             "Threshold reference",
             "Frame difference <= Held-Frame Threshold: repeat the original frame.\n"
-            "Difference between both thresholds: run AI interpolation.\n"
-            "Frame difference >= Scene-Change Threshold: protect the cut and do not blend frames.\n\n"
-            "Lower Scene-Change Threshold: detects more cuts, but may skip fast motion.\n"
+            "Difference left after following the motion >= Scene-Change Threshold: "
+            "protect the cut and do not blend frames.\n"
+            "Anything else: run AI interpolation.\n\n"
+            "Lower Scene-Change Threshold: detects more cuts, but may hold very fast motion.\n"
             "Higher Scene-Change Threshold: detects fewer cuts, but may blend scene changes.\n"
             "Higher Held-Frame Threshold: treats more subtle motion as static.\n"
-            "Recommended defaults: Scene 0.32, Held Frame 0.002.",
+            "Recommended defaults: Scene 0.12, Held Frame 0.002.",
         )
         performance_frame = tab_content["Performance"]
         ctk.CTkLabel(performance_frame, text="Temporary Cache Folder", anchor="w").pack(
@@ -1411,6 +1460,12 @@ class AnimeVfiPro:
                     AnimeVfiPro._save_settings_file(settings)
             except (OSError, json.JSONDecodeError):
                 pass
+        if settings["scene_threshold"] == LEGACY_SCENE_THRESHOLD:
+            # 0.32 was the default for the old plain frame-difference check;
+            # the motion-compensated check uses a different scale.
+            settings["scene_threshold"] = DEFAULT_SETTINGS["scene_threshold"]
+        if settings["default_multiplier"] not in FRAME_RATE_CHOICES:
+            settings["default_multiplier"] = DEFAULT_SETTINGS["default_multiplier"]
         return settings
 
     @staticmethod
@@ -1601,6 +1656,19 @@ class AnimeVfiPro:
             entry.insert(0, value or "")
             entry.configure(state="disabled")
             entry.pack(fill="x", padx=horizontal_padding)
+
+    def _frame_rate_mode_changed(self, *_args: object) -> None:
+        if self.multiplier.get() == CUSTOM_FRAME_RATE:
+            self.custom_fps_field.grid(row=1, column=0, sticky="ew")
+        else:
+            self.custom_fps_field.grid_remove()
+
+    def _frame_rate_choice(self) -> str:
+        """The selected frame rate, e.g. "4x" or "60 fps"; raises ValueError for a bad custom value."""
+        choice = self.multiplier.get()
+        if choice == CUSTOM_FRAME_RATE:
+            return custom_frame_rate_choice(self.custom_fps.get())
+        return choice
 
     def _mode_changed(self, *_args: object) -> None:
         selected_backend = self.model_name.get()
@@ -1806,11 +1874,23 @@ class AnimeVfiPro:
         if free_space < 1024**3:
             messagebox.showerror("Storage", "Less than 1 GB of free space is available in the output directory.")
             return
+        try:
+            frame_rate = self._frame_rate_choice()
+        except ValueError as exc:
+            messagebox.showerror("Custom Frame Rate", str(exc))
+            return
         for item in self.items:
             try:
                 info = probe_video(item.path)
             except (PipelineError, subprocess.CalledProcessError, OSError) as exc:
                 messagebox.showerror("Invalid Video", f"{item.path.name}\n\n{exc}")
+                return
+            if frame_rate_target(frame_rate, info.fps) <= info.fps + 0.01:
+                messagebox.showerror(
+                    "Frame Rate",
+                    f"{item.path.name} is already {format_output_fps(info.fps)} fps.\n\n"
+                    "Choose a frame rate higher than the source, or a multiplier such as 2x.",
+                )
                 return
             if info.width >= 3840 or info.height >= 2160:
                 mode = str(self.settings["uhd_mode"])
@@ -1839,7 +1919,7 @@ class AnimeVfiPro:
             ),
             "mode": "anime" if self.mode.get() == "Anime" else "live-action",
             "extension": output_extension(self.output_format.get()),
-            "multiplier": self.multiplier.get().removesuffix("x"),
+            "frame_rate": frame_rate,
             "slow_motion_factor": (
                 self.slow_motion.get().removesuffix("x") if self.slow_motion.get() != "Off" else "1"
             ),
@@ -1855,7 +1935,7 @@ class AnimeVfiPro:
         mode = str(job_config["mode"])
         backend = str(job_config["backend"])
         extension = str(job_config["extension"])
-        multiplier = str(job_config["multiplier"])
+        frame_rate = str(job_config["frame_rate"])
         slow_motion_factor = str(job_config["slow_motion_factor"])
         runtime_config = Path(job_config["runtime_config"])
         try:
@@ -1871,7 +1951,7 @@ class AnimeVfiPro:
                             item.path.stem,
                             extension,
                             input_info.fps,
-                            int(multiplier),
+                            frame_rate,
                             int(slow_motion_factor),
                         )
                     )
@@ -1885,7 +1965,7 @@ class AnimeVfiPro:
                     command = [
                         str(self._pipeline_python()), str(pipeline), "batch", str(manifest),
                         "--backend", backend,
-                        "--mode", mode, "--multiplier", multiplier,
+                        "--mode", mode, *frame_rate_arguments(frame_rate),
                         "--scale", str(job_config["scale"]),
                         "--config", str(runtime_config),
                         "--uhd-mode",
@@ -1995,7 +2075,7 @@ class AnimeVfiPro:
                         item.path.stem,
                         extension,
                         input_info.fps,
-                        int(multiplier),
+                        frame_rate,
                         int(slow_motion_factor),
                     )
                 )
@@ -2003,7 +2083,7 @@ class AnimeVfiPro:
                 command = [
                     str(self._pipeline_python()), str(pipeline), "run", str(item.path), str(output),
                     "--backend", backend,
-                    "--mode", mode, "--multiplier", multiplier,
+                    "--mode", mode, *frame_rate_arguments(frame_rate),
                     "--scale", str(job_config["scale"]),
                     "--config", str(runtime_config),
                     "--uhd-mode",
@@ -2382,10 +2462,10 @@ try {
     def _log_job_estimate(self) -> None:
         total_frames = 0
         total_bytes = 0
-        multiplier = int(self.multiplier.get().removesuffix("x"))
         for item in self.items:
             info = probe_video(item.path)
-            output_frames = info.frame_count * multiplier
+            multiplier = frame_rate_target(self._frame_rate_choice(), info.fps) / info.fps
+            output_frames = int(info.frame_count * multiplier)
             total_frames += output_frames
             # Near-lossless HEVC intermediate measured at ~0.055 bytes/pixel per
             # frame; budget 0.12 to cover detailed footage and the final file.

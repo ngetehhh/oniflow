@@ -145,6 +145,31 @@ class CoreTests(unittest.TestCase):
         engine = (ROOT / "work" / "GMFSS_Fortuna" / "inference_video.py").read_text(encoding="utf-8")
         self.assertIn('"-r", exact_rate(fps)', engine)
 
+    def test_any_target_fps_is_accepted(self):
+        self.assertEqual(MODULE.engine_multiplier(24000 / 1001, 48000 / 1001), 2)
+        self.assertEqual(MODULE.engine_multiplier(23.976, 191.808), 8)
+        self.assertEqual(MODULE.engine_multiplier(24000 / 1001, 60.0), 3)
+        self.assertEqual(MODULE.engine_multiplier(24.0, 30.0), 2)
+        self.assertEqual(MODULE.engine_multiplier(30.0, 144.0), 5)
+
+    def test_scene_cut_rule_separates_cuts_from_fast_motion(self):
+        import ast
+        engine = (ROOT / "work" / "GMFSS_Fortuna" / "inference_video.py").read_text(encoding="utf-8")
+        tree = ast.parse(engine)
+        wanted = [node for node in tree.body
+                  if isinstance(node, ast.FunctionDef) and node.name == "is_scene_cut"
+                  or isinstance(node, ast.Assign) and getattr(node.targets[0], "id", "") == "SCENE_COLOR_CHANGE"]
+        namespace = {}
+        exec(compile(ast.Module(body=wanted, type_ignores=[]), "engine", "exec"), namespace)
+        is_scene_cut = namespace["is_scene_cut"]
+        # (motion-compensated difference, colour change) measured on an anime episode
+        cuts = [(0.149, 0.312), (0.1, 0.444), (0.21, 0.398), (0.167, 0.174), (0.122, 0.481)]
+        fast_motion = [(0.106, 0.308), (0.1, 0.167), (0.084, 0.177), (0.079, 0.095), (0.076, 0.348)]
+        for motion, colour in cuts:
+            self.assertTrue(is_scene_cut(motion, colour, 0.12), (motion, colour))
+        for motion, colour in fast_motion:
+            self.assertFalse(is_scene_cut(motion, colour, 0.12), (motion, colour))
+
     def test_odd_resolution_rounds_down_to_even(self):
         def info(width, height):
             return MODULE.VideoInfo(width, height, 30.0, 1.0, 30, "h264", "yuv444p", False, False)

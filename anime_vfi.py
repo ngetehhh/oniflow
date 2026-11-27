@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
 import shutil
@@ -120,6 +121,18 @@ def parse_rate(value: str) -> float:
         return float(Fraction(value))
     except (ValueError, ZeroDivisionError) as exc:
         raise PipelineError(f"Frame rate tidak valid: {value}") from exc
+
+
+def engine_multiplier(source_fps: float, target_fps: float) -> int:
+    """Whole multiplier for the engine: exact for 2x/4x/..., else the next one up.
+
+    The engine places frames at their true times for any target FPS (for
+    example 23.976 -> 60); the multiplier only sizes the motion scale.
+    """
+    multiplier = round(target_fps / source_fps)
+    if multiplier >= 2 and abs(source_fps * multiplier - target_fps) <= 0.02:
+        return multiplier
+    return max(2, math.ceil(target_fps / source_fps))
 
 
 def resolve_motion_scale(
@@ -585,12 +598,7 @@ def interpolate_gmfss(
         temp_owner = tempfile.TemporaryDirectory(prefix="anime-vfi-", dir=temp_root)
         temp_dir = Path(temp_owner.name)
     info = probe_video(input_path)
-    multiplier = round(target_fps / info.fps)
-    if multiplier < 2 or abs(info.fps * multiplier - target_fps) > 0.02:
-        raise PipelineError(
-            "GMFSS membutuhkan pengali FPS integer. "
-            "Gunakan --multiplier, misalnya --multiplier 10."
-        )
+    multiplier = engine_multiplier(info.fps, target_fps)
     requested_scale = scale
     scale = resolve_motion_scale(info.width, info.height, requested_scale, uhd_mode, multiplier, motion_profile)
     if uhd_mode == "memory" and scale != requested_scale:
@@ -729,9 +737,7 @@ def interpolate_gmfss_batch(
         first_values: dict[str, str] | None = None
         for index, (input_path, output_path, target_fps) in enumerate(jobs, start=1):
             info = probe_video(input_path)
-            multiplier = round(target_fps / info.fps)
-            if multiplier < 2 or abs(info.fps * multiplier - target_fps) > 0.02:
-                raise PipelineError("GMFSS batch membutuhkan pengali FPS integer.")
+            multiplier = engine_multiplier(info.fps, target_fps)
             resolved_scale = resolve_motion_scale(
                 info.width, info.height, scale, uhd_mode, multiplier, motion_profile
             )
@@ -756,7 +762,7 @@ def interpolate_gmfss_batch(
                     "fps": target_fps,
                     "multi": multiplier,
                     "scale": resolved_scale,
-                    "scene_threshold": scene_threshold if scene_threshold is not None else 0.32,
+                    "scene_threshold": scene_threshold if scene_threshold is not None else 0.12,
                     "static_threshold": static_threshold if static_threshold is not None else 0.002,
                     "throttle_ms": throttle_ms,
                 }
@@ -833,7 +839,7 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("input", type=existing_file)
     run_parser.add_argument("output", type=Path)
     target_group = run_parser.add_mutually_exclusive_group()
-    target_group.add_argument("--fps", type=float, help="FPS tujuan. Harus merupakan pengali integer FPS sumber.")
+    target_group.add_argument("--fps", type=float, help="FPS tujuan, misalnya 60. Boleh bukan kelipatan FPS sumber.")
     target_group.add_argument("--multiplier", type=int, default=2, help="Pengali FPS. Nilai bawaan: 2.")
     run_parser.add_argument("--engine", choices=["gmfss", "preview"], default="gmfss")
     run_parser.add_argument("--backend", default="gmfss", help="Backend interpolasi yang tersedia di config.json.")

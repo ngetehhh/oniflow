@@ -190,8 +190,9 @@ parser.add_argument('--ext', dest='ext', type=str, default='mp4', help='vid_out 
 parser.add_argument('--exp', dest='exp', type=int, default=1)
 parser.add_argument('--multi', dest='multi', type=int, default=2)
 parser.add_argument('--union', dest='union', action='store_true', help='use union model')
-parser.add_argument('--scene-threshold', dest='scene_threshold', type=float, default=0.32,
-                    help='hold the previous frame when mean normalized difference exceeds this value')
+parser.add_argument('--scene-threshold', dest='scene_threshold', type=float, default=0.12,
+                    help='hold the previous frame at a scene cut: the difference left after motion '
+                         'compensation reaches this value (values of 1 or more turn detection off)')
 parser.add_argument('--static-threshold', dest='static_threshold', type=float, default=0.002,
                     help='repeat held frames when mean normalized difference is below this value')
 parser.add_argument('--object-protection', dest='object_protection', action=argparse.BooleanOptionalAction,
@@ -250,6 +251,7 @@ model.load_model(args.modelDir, -1)
 print("Loaded model")
 model.eval()
 model.device()
+from model.warplayer import warp as backward_warp
 
 def clear_write_buffer(user_args, write_buffer, errors):
     cnt = 0
@@ -310,30 +312,54 @@ def build_object_protection_mask(previous_frame, next_frame, user_args):
             mask = mask / peak
     return mask[:, :, None]
 
-def protect_interpolated_object(mid_frame, previous_frame, next_frame, mask, position, total_positions):
+def protect_interpolated_object(mid_frame, previous_frame, next_frame, mask, timestep):
     if mask is None:
         return mid_frame
-    source_frame = previous_frame if position <= (total_positions / 2) else next_frame
+    source_frame = previous_frame if timestep <= 0.5 else next_frame
     protected = mid_frame.astype(np.float32) * (1.0 - mask) + source_frame.astype(np.float32) * mask
     return np.clip(protected, 0, 255).astype(np.uint8)
 
-def make_inference(I0, I1, reuse_things, n):    
-    global model
-    if model.version >= 3.9:
-        res = []
-        for i in range(n):
-            res.append(model.inference(I0, I1, reuse_things, (i+1) * 1. / (n+1)))
-        return res
-    else:
-        middle = model.inference(I0, I1, args.scale)
-        if n == 1:
-            return [middle]
-        first_half = make_inference(I0, middle, n=n//2)
-        second_half = make_inference(middle, I1, n=n//2)
-        if n%2:
-            return [*first_half, middle, *second_half]
-        else:
-            return [*first_half, *second_half]
+# A cut also changes the colours on screen; fast motion in the same shot mostly does not.
+SCENE_COLOR_CHANGE = 0.4
+
+def color_change(previous_frame, next_frame):
+    """Share of the colour distribution that differs: 0 = same colours, 1 = none in common."""
+    def histogram(frame):
+        small = cv2.resize(frame, (320, 180), interpolation=cv2.INTER_AREA).astype(np.int32) // 32
+        bins = small[..., 0] * 64 + small[..., 1] * 8 + small[..., 2]
+        return np.bincount(bins.ravel(), minlength=512) / bins.size
+    return 0.5 * float(np.abs(histogram(previous_frame) - histogram(next_frame)).sum())
+
+def motion_compensated_difference(I0, I1, flow01, flow10):
+    """Mean difference left after moving each frame onto the other with the model's flow.
+
+    Fast motion mostly cancels out here, so it is not mistaken for a cut the way
+    the plain frame difference was; two different shots stay far apart.
+    """
+    img0 = F.interpolate(I0.float(), scale_factor=0.5, mode="bilinear", align_corners=False)
+    img1 = F.interpolate(I1.float(), scale_factor=0.5, mode="bilinear", align_corners=False)
+    difference01 = (backward_warp(img1, flow01.float()) - img0).abs().mean()
+    difference10 = (backward_warp(img0, flow10.float()) - img1).abs().mean()
+    return float((difference01 + difference10) / 2)
+
+def is_scene_cut(motion_difference, color_difference, threshold):
+    return motion_difference >= threshold or (
+        motion_difference >= 0.75 * threshold and color_difference >= SCENE_COLOR_CHANGE
+    )
+
+def make_inference(I0, I1, reuse_things, timesteps):
+    return [model.inference(I0, I1, reuse_things, timestep) for timestep in timesteps]
+
+def output_frame_step(source_fps, output_fps, multi):
+    """Distance between output frames, measured in source frames.
+
+    Integer multipliers keep the exact 1/multi steps. Any other target, such
+    as 23.976 -> 60 fps, places each output frame at its true time between two
+    source frames and interpolates at that point.
+    """
+    if abs(source_fps * multi - output_fps) <= 0.02:
+        return Fraction(1, multi)
+    return Fraction(exact_rate(source_fps)) / Fraction(exact_rate(output_fps))
 
 def pad_image(img):
     if(args.fp16):
@@ -399,6 +425,12 @@ def process_video(user_args):
     padding = (0, pw - w, 0, ph - h)
     pbar = tqdm(total=tot_frame)
     processed_frames = 0
+    if args.video is not None:
+        step = output_frame_step(fps, args.fps, args.multi)
+    else:
+        step = Fraction(1, args.multi)  # image sequences have no source frame rate
+    next_position = Fraction(0)  # time of the next output frame, in source frames
+    scene_cuts = 0
     if args.montage:
         lastframe = lastframe[:, left: left + w]
     write_buffer = Queue(maxsize=500)
@@ -430,29 +462,51 @@ def process_video(user_args):
         I1 = I1 / 255.
         I1 = F.interpolate(I1, (ph, pw), mode='bilinear', align_corners=False)
 
+        # Output frames that fall between source frame `processed_frames` and the next one.
+        timesteps = []
+        while next_position < processed_frames + 1:
+            timesteps.append(next_position - processed_frames)
+            next_position += step
+        writes_source_frame = bool(timesteps) and timesteps[0] == 0
+        mid_timesteps = [float(t) for t in timesteps if t != 0]
+
         frame_difference = float(np.mean(np.abs(lastframe.astype(np.float32) - frame.astype(np.float32))) / 255.0)
         protection_mask = None
-        if frame_difference <= args.static_threshold or frame_difference >= args.scene_threshold:
-            output = [I0] * (args.multi - 1)
+        if not mid_timesteps:
+            output = []
+        elif frame_difference <= args.static_threshold:
+            output = [I0] * len(mid_timesteps)
         else:
-            protection_mask = build_object_protection_mask(lastframe, frame, args)
             amp_context = torch.autocast(device_type="cuda", dtype=torch.float16) if args.amp and torch.cuda.is_available() else nullcontext()
             with amp_context:
                 reuse_things = model.reuse(I0, I1, args.scale)
-                output = make_inference(I0, I1, reuse_things, args.multi-1)
+                scene_cut = args.scene_threshold < 1 and is_scene_cut(
+                    motion_compensated_difference(I0, I1, reuse_things[0], reuse_things[1]),
+                    color_change(lastframe, frame),
+                    args.scene_threshold,
+                )
+                if scene_cut:
+                    # Keep the cut sharp: hold the last frame of the old shot.
+                    output = [I0] * len(mid_timesteps)
+                    scene_cuts += 1
+                else:
+                    protection_mask = build_object_protection_mask(lastframe, frame, args)
+                    output = make_inference(I0, I1, reuse_things, mid_timesteps)
 
         if args.montage:
-            write_buffer.put(np.concatenate((lastframe, lastframe), 1))
-            for index, mid in enumerate(output, start=1):
+            if writes_source_frame:
+                write_buffer.put(np.concatenate((lastframe, lastframe), 1))
+            for timestep, mid in zip(mid_timesteps, output):
                 mid = (((mid[0] * 255.).byte().cpu().numpy().transpose(1, 2, 0)))
-                mid = protect_interpolated_object(mid[:h, :w], lastframe, frame, protection_mask, index, args.multi)
+                mid = protect_interpolated_object(mid[:h, :w], lastframe, frame, protection_mask, timestep)
                 write_buffer.put(np.concatenate((lastframe, mid[:h, :w]), 1))
         else:
-            write_buffer.put(lastframe)
-            for index, mid in enumerate(output, start=1):
+            if writes_source_frame:
+                write_buffer.put(lastframe)
+            for timestep, mid in zip(mid_timesteps, output):
                 mid = F.interpolate(mid, (h, w), mode='bilinear', align_corners=False)
                 mid = (((mid[0] * 255.).byte().cpu().numpy().transpose(1, 2, 0)))
-                mid = protect_interpolated_object(mid, lastframe, frame, protection_mask, index, args.multi)
+                mid = protect_interpolated_object(mid, lastframe, frame, protection_mask, timestep)
                 write_buffer.put(mid)
         pbar.update(1)
         processed_frames += 1
@@ -461,14 +515,18 @@ def process_video(user_args):
             time.sleep(args.throttle_ms / 1000.0)
         lastframe = frame
 
-    if args.montage:
-        write_buffer.put(np.concatenate((lastframe, lastframe), 1))
-    else:
-        # End on the last real frame. Repeating it (multi - 1) more times only
-        # padded the duration with frozen frames at the end of every clip.
-        write_buffer.put(lastframe)
+    # End on the last real frame when an output frame lands exactly on it.
+    # Repeating it (multi - 1) more times only padded the duration with
+    # frozen frames at the end of every clip.
+    if next_position == processed_frames:
+        if args.montage:
+            write_buffer.put(np.concatenate((lastframe, lastframe), 1))
+        else:
+            write_buffer.put(lastframe)
     write_buffer.put(None)
     writer_thread.join()
+    if scene_cuts:
+        print('VFI_NOTICE scene cuts kept sharp: {}'.format(scene_cuts), flush=True)
     pbar.close()
     if not vid_out is None:
         vid_out.release()
